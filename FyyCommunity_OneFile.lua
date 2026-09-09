@@ -499,8 +499,22 @@ do
             })
         end
         
-        -- /api/v1/script-distribution/runtime/resolve -> let it fail (real CDN used)
-        -- Return nil so payload falls back to real CDN routes
+        -- /api/v1/script-distribution/runtime/resolve -> serve dari GitHub repo kita
+        -- Runtime di-embed di FyyCommunity_Runtime.lua
+        if u:find("runtime/resolve") or u:find("script%-distribution") then
+            warn("[FyyBypass] Serving runtime dari GitHub...")
+            local _RUNTIME_URL = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/FyyCommunity_Runtime.lua"
+            local _rok, _rbody = pcall(function()
+                return game:HttpGet(_RUNTIME_URL, true)
+            end)
+            if _rok and _rbody and #_rbody > 1000 then
+                warn("[FyyBypass] Runtime OK (" .. #_rbody .. " bytes)")
+                return { StatusCode = 200, Status = 200, Body = _rbody }
+            else
+                warn("[FyyBypass] Runtime gagal: " .. tostring(_rbody))
+                return nil
+            end
+        end
         return nil
     end
     
