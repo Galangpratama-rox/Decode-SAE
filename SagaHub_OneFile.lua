@@ -500,10 +500,10 @@ do
         end
         
         -- /api/v1/script-distribution/runtime/resolve -> serve dari GitHub repo kita
-        -- Runtime di-embed di FyyCommunity_Runtime.lua
+        -- Runtime di-embed di SagaHub_Runtime.lua
         if u:find("runtime/resolve") or u:find("script%-distribution") then
             warn("[FyyBypass] Serving runtime dari GitHub...")
-            local _RUNTIME_URL = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/FyyCommunity_Runtime.lua"
+            local _RUNTIME_URL = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Runtime.lua"
             local _rok, _rbody = pcall(function()
                 return game:HttpGet(_RUNTIME_URL, true)
             end)
