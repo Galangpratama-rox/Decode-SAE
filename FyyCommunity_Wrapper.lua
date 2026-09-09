@@ -59,7 +59,7 @@ end
 -- ============================================================
 -- BAGIAN 2: FAKE RESPONSE PER ENDPOINT
 -- ============================================================
-local function fakeResponse(url)
+local function fakeResponse(url, opts, origFn)
     local u = tostring(url or ""):lower()
     local sid  = "bp-"..tostring(math.random(1e6,9e6))
     local stok = "bt-"..tostring(math.random(1e6,9e6))
@@ -87,6 +87,19 @@ local function fakeResponse(url)
     if u:find("/api/v1/check") then
         return R({status="ok", session=sess, continuityCredential="bypass-continuity"})
     end
+
+    -- runtime/resolve: response-nya adalah script Lua langsung (bukan JSON)
+    -- Harus pakai request asli agar runtime berhasil didownload dari CDN
+    if u:find("runtime/resolve") or u:find("script%-distribution") then
+        warn("[FyyWrapper] Letting runtime/resolve through to real CDN...")
+        if type(origFn)=="function" then
+            local ok, res = pcall(origFn, opts)
+            if ok then return res end
+        end
+        -- Fallback: coba HttpGet langsung ke CDN
+        return nil
+    end
+
     return R({status="ok"})
 end
 
@@ -101,9 +114,11 @@ local function fakeReq(opts)
     local url = type(opts)=="table" and tostring(opts.Url or opts.url or "") or tostring(opts or "")
     if url:find("fyycommunity%.com") or url:find("104%-20") then
         warn("[FyyWrapper] Intercepted: "..url)
-        return fakeResponse(url)
+        local resp = fakeResponse(url, opts, origReq)
+        if resp ~= nil then return resp end
+        -- resp==nil berarti endpoint ini harus diteruskan ke CDN asli
     end
-    -- Non-fyycommunity: teruskan ke request asli
+    -- Non-fyycommunity ATAU runtime/resolve yang perlu CDN asli
     if type(origReq)=="function" then return origReq(opts) end
     -- Fallback GET via game:HttpGet
     if type(opts)~="table" or not opts.Method or opts.Method=="GET" then
