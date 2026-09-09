@@ -578,7 +578,17 @@ do
                     type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET")
                 if fake then return fake end
             end
-            return orig_fn(opts)
+            -- Non-fyycommunity: gunakan orig_fn (request asli executor)
+            if type(orig_fn) == "function" then
+                return orig_fn(opts)
+            end
+            -- Fallback jika orig_fn nil
+            local _ge_fb = (getgenv and getgenv()) or _G
+            local _orig_fb = rawget(_ge_fb, "__FyyOrigRequest")
+            if type(_orig_fb) == "function" then
+                return _orig_fb(opts)
+            end
+            return {StatusCode=0,Status=0,Body=""}
         end
     end
 
@@ -616,12 +626,17 @@ do
         end)
     end
 
-        -- Set __FyyFakeReq agar Tu669bhFa[(0x5DB)] langsung pakai ini
+        -- Simpan origRequest SEBELUM di-replace, untuk dipakai fakeReq
+    -- saat forward non-fyycommunity request (mis: games.roblox.com)
     do
         local _ge2 = (getgenv and getgenv()) or _G
+        local _origReq = rawget(_ge2,"request") or rawget(_ge2,"http_request")
+                      or rawget(_ge2,"httprequest")
+        if type(_origReq) == "function" then
+            rawset(_ge2, "__FyyOrigRequest", _origReq)
+        end
         rawset(_ge2, "__FyyFakeReq", make_hooked(
-            rawget(_ge2,"request") or rawget(_ge2,"http_request") or
-            rawget(_ge2,"httprequest") or function() return {StatusCode=0,Body=""} end
+            _origReq or function() return {StatusCode=0,Body=""} end
         ))
     end
     print("[FyyBypass] Bypass aktif — keyless mode setiap execute")
@@ -1002,9 +1017,13 @@ do
         fakeReq = function(opts)
             local url = type(opts)=="table" and tostring(opts.Url or opts.url or "") or tostring(opts or "")
             if not url:find("fyycommunity%.com") then
+                -- Forward non-fyycommunity ke request asli executor
                 local orig = rawget(ge,"__FyyOrigRequest")
+                    or rawget(ge,"request") ~= fakeReq and rawget(ge,"request")
+                    or rawget(ge,"http_request")
                 if type(orig)=="function" then return orig(opts) end
-                if type(opts)=="table" and (not opts.Method or opts.Method=="GET") then
+                -- Fallback GET
+                if type(opts)~="table" or not opts.Method or opts.Method=="GET" then
                     local ok2,body = pcall(function() return game:HttpGet(url,true) end)
                     if ok2 and body then return {StatusCode=200,Status=200,Body=body} end
                 end
