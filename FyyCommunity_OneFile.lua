@@ -387,26 +387,20 @@ end
 -- [BYPASS] Key System Bypass — Auto Keyless Mode
 -- Intercept HTTP requests ke fyycommunity.com API
 -- Semua endpoint otomatis return response yang valid
+-- Robust: hook semua request path + hH45k3O injection
 -- ============================================================
 do
-    local _orig_request = nil
-    local _orig_HttpGet = nil
-    
-    -- Cari request function yang dipakai payload
-    local function get_request_fn()
-        local ge = (getgenv and getgenv()) or _G
-        return rawget(ge, "request")
-            or rawget(ge, "http_request")
-            or rawget(ge, "httprequest")
-            or (rawget(ge, "syn") and rawget(ge, "syn").request)
-            or (rawget(ge, "http") and rawget(ge, "http").request)
+    -- Guard: skip jika bypass sudah aktif (double-execute protection)
+    local ge0 = (getgenv and getgenv()) or _G
+    if rawget(ge0, "__FyyBypassActive") then
+        -- Reset session values agar rejoin tetap dapat session baru
+        rawset(ge0, "__FyyBypassActive", nil)
     end
-    
-    -- Dummy HWID & session values
-    local DUMMY_HWID        = "bypass-hwid-" .. tostring(math.random(100000, 999999))
+
+    -- Dummy HWID & session values (konsisten per-session)
     local DUMMY_SESSION_ID  = "bypass-session-" .. tostring(math.random(1000000, 9999999))
     local DUMMY_SESSION_TOK = "bypass-token-" .. tostring(math.random(1000000, 9999999))
-    local DUMMY_CHALLENGE   = string.rep("61", 32)  -- 64 hex chars -> 32 bytes setelah decode
+    local DUMMY_CHALLENGE   = string.rep("61", 32)  -- 64 hex chars -> 32 bytes
     local DUMMY_CHALLENGE_ID= "bypass-challenge-" .. tostring(math.random(100000, 999999))
     
     -- Respon dummy per endpoint
@@ -506,44 +500,67 @@ do
         return nil
     end
     
-    -- Hook request function
-    local req_fn = get_request_fn()
-    if req_fn then
-        local original_req = req_fn
-        local function hooked_request(opts)
-            local url = type(opts) == "table" and (opts.Url or opts.url or "") or tostring(opts)
-            if tostring(url):find("fyycommunity%.com") then
-                local fake = fake_response(url, opts.Method or opts.method or "GET")
+    -- ========================================================
+    -- Hook semua request paths yang payload bisa gunakan
+    -- Dipatch ke fake_response untuk fyycommunity.com
+    -- ========================================================
+    local function make_hooked(orig_fn)
+        return function(opts)
+            local url = ""
+            if type(opts) == "table" then
+                url = tostring(opts.Url or opts.url or "")
+            else
+                url = tostring(opts or "")
+            end
+            if url:find("fyycommunity%.com") then
+                local fake = fake_response(url,
+                    type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET")
                 if fake then return fake end
             end
-            return original_req(opts)
-        end
-        -- Override in all possible locations
-        local ge = (getgenv and getgenv()) or _G
-        if rawget(ge, "request") then ge.request = hooked_request end
-        if rawget(ge, "http_request") then ge.http_request = hooked_request end
-        if rawget(ge, "httprequest") then ge.httprequest = hooked_request end
-        if rawget(ge, "syn") and type(rawget(ge, "syn")) == "table" then
-            pcall(function()
-                local orig_syn = rawget(ge, "syn")
-                ge.syn = setmetatable({}, {
-                    __index = function(_, k)
-                        if k == "request" then return hooked_request end
-                        return orig_syn[k]
-                    end
-                })
-            end)
-        end
-        -- Patch root_env (hH45k3O yang dipakai payload)
-        if type(root_env) == "table" then
-            if root_env.request then root_env.request = hooked_request end
+            return orig_fn(opts)
         end
     end
-    
-    -- Also hook game:HttpGet for CDN downloads (game runtime) — leave them untouched
-    -- We only hook fyycommunity.com requests
-    
-    print("[FyyBypass] Key bypass aktif — mode: public_maintenance (keyless)")
+
+    -- Hook global getgenv/_G
+    local ge = (getgenv and getgenv()) or _G
+    for _, k in ipairs({"request","http_request","httprequest"}) do
+        local orig = rawget(ge, k)
+        if type(orig) == "function" then
+            ge[k] = make_hooked(orig)
+        end
+    end
+    -- Hook syn.request
+    pcall(function()
+        if type(rawget(ge,"syn")) == "table" and type(ge.syn.request) == "function" then
+            local orig_r = ge.syn.request
+            ge.syn.request = make_hooked(orig_r)
+        end
+    end)
+    -- Hook fluxus.request
+    pcall(function()
+        if type(rawget(ge,"fluxus")) == "table" and type(ge.fluxus.request) == "function" then
+            ge.fluxus.request = make_hooked(ge.fluxus.request)
+        end
+    end)
+    -- Patch root_env dan hH45k3O (env table yang dipakai payload)
+    for _, env_tbl in ipairs({root_env, hH45k3O}) do
+        pcall(function()
+            if type(env_tbl) == "table" then
+                for _, k in ipairs({"request","http_request","httprequest"}) do
+                    if type(env_tbl[k]) == "function" then
+                        env_tbl[k] = make_hooked(env_tbl[k])
+                    end
+                end
+            end
+        end)
+    end
+
+    print("[FyyBypass] Bypass aktif — keyless mode setiap execute")
+    -- Mark bypass sebagai aktif untuk session ini
+    pcall(function()
+        local ge2 = (getgenv and getgenv()) or _G
+        rawset(ge2, "__FyyBypassActive", true)
+    end)
 end
 -- ============================================================
 -- END BYPASS
@@ -736,8 +753,98 @@ if not __FYY_PAYLOAD_FN then
 end
 
 -- Payload sudah memiliki outer closure (function(Vj0r0XiN,...)) sendiri.
--- Cukup panggil langsung dengan root_env sebagai argumen pertama (= Vj0r0XiN).
+-- Inject hooked request langsung ke root_env SEBELUM payload run.
 setfenv(__FYY_PAYLOAD_FN, root_env)
+
+-- PATCH: Pastikan root_env.request selalu return hooked version
+-- Ini fix untuk rawget(getgenv(), "request") di dalam payload
+do
+    local ge = (getgenv and getgenv()) or _G
+    -- Bangun hooked request yang sama logikanya dengan bypass di atas
+    local function _fyyHookReq(orig)
+        if not orig then return nil end
+        return function(opts)
+            local url = type(opts)=="table" and tostring(opts.Url or opts.url or "") or tostring(opts or "")
+            if url:find("fyycommunity%.com") then
+                local hs = game:GetService("HttpService")
+                local sid = "bs-"..tostring(math.random(1e6,9e6))
+                local stok= "bt-"..tostring(math.random(1e6,9e6))
+                local chal= string.rep("61",32)
+                local cid = "bc-"..tostring(math.random(1e5,9e5))
+                local function J(t)
+                    local ok,r = pcall(function() return hs:JSONEncode(t) end)
+                    return ok and r or "{}"
+                end
+                local u = url:lower()
+                local body
+                if u:find("access%-mode") or u:find("loader/access") then
+                    body = J({status="ok",data={mode="public_maintenance"}})
+                elseif u:find("check/challenge") then
+                    body = J({status="ok",transportKey=chal,challengeId=cid})
+                elseif u:find("check/maintenance") then
+                    body = J({status="ok",
+                        session={sessionId=sid,sessionToken=stok,
+                                 nextHeartbeatSeconds=999999,
+                                 accessTier="premium",licenseType="premium"},
+                        continuityCredential="bypass",
+                        accessTier="premium",licenseType="premium"})
+                elseif u:find("heartbeat") then
+                    body = J({status="ok",state="active"})
+                elseif u:find("/api/v1/check") then
+                    body = J({status="ok",
+                        session={sessionId=sid,sessionToken=stok,
+                                 nextHeartbeatSeconds=999999,
+                                 accessTier="premium",licenseType="premium"},
+                        continuityCredential="bypass"})
+                else
+                    return orig(opts)
+                end
+                return {StatusCode=200,Status=200,Body=body}
+            end
+            return orig(opts)
+        end
+    end
+
+    -- Patch semua request paths di getgenv/_G dan root_env
+    -- Gunakan RAWSET sehingga rawget() juga dapat versi ter-hook
+    for _, k in ipairs({"request","http_request","httprequest"}) do
+        local orig = rawget(ge, k)
+        if type(orig) == "function" then
+            rawset(ge, k, _fyyHookReq(orig))
+        end
+        if type(root_env) == "table" then
+            local orig2 = rawget(root_env, k) or rawget(ge, k)
+            if type(orig2) == "function" then
+                rawset(root_env, k, _fyyHookReq(orig2))
+            end
+        end
+    end
+
+    -- Patch syn.request dengan rawset juga
+    pcall(function()
+        if type(rawget(ge,"syn"))=="table" and type(rawget(ge.syn,"request"))=="function" then
+            rawset(ge.syn, "request", _fyyHookReq(ge.syn.request))
+        end
+    end)
+
+    -- Simpan "bypass key" ke file agar auto-load saat rejoin
+    -- Payload load_saved_key fn baca dari path Tu669bhFa[(205*2)] = "FyyCommunity/license.key"
+    pcall(function()
+        local wf = rawget(ge,"writefile") or rawget(ge,"writeFile")
+        local mf = rawget(ge,"makefolder") or rawget(ge,"makeFolder")
+        local isf = rawget(ge,"isfolder") or rawget(ge,"isFolder")
+        if wf then
+            if mf then
+                local ok_isf = isf and isf("FyyCommunity")
+                if not ok_isf then
+                    pcall(mf, "FyyCommunity")
+                end
+            end
+            pcall(wf, "FyyCommunity/license.key", "BYPASS-AUTO-KEY")
+        end
+    end)
+end
+
 local _ok, _ret = pcall(__FYY_PAYLOAD_FN, root_env)
 if _ok then
     local StarterGui = game:GetService("StarterGui")
