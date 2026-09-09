@@ -1084,6 +1084,43 @@ end
 
 local _ok, _ret = pcall(__FYY_PAYLOAD_FN, root_env)
 if _ok then
+    -- Inject __FYY_ACCESS_HANDOFF manual jika payload tidak set
+    -- Runtime butuh ini untuk unlock semua fitur (server browser, dll)
+    task.delay(0.5, function()
+        local _ge = (getgenv and getgenv()) or _G
+        local _handoff = rawget(_ge, "__FYY_ACCESS_HANDOFF")
+            or rawget(_G, "__FYY_ACCESS_HANDOFF")
+            or (type(shared)=="table" and shared["__FYY_ACCESS_HANDOFF"])
+        if not _handoff then
+            warn("[FyyBypass] HANDOFF tidak ada — inject manual")
+            local _sid  = "bypass-" .. tostring(math.random(1e6,9e6))
+            local _stok = "bypass-tok-" .. tostring(math.random(1e6,9e6))
+            local _fake_handoff = {
+                session = {
+                    sessionId            = _sid,
+                    sessionToken         = _stok,
+                    accessTier           = "premium",
+                    licenseType          = "premium",
+                    nextHeartbeatSeconds = 999999,
+                    accessMode           = "public_maintenance",
+                },
+                heartbeat = function() return true end,
+                accessTier  = "premium",
+                licenseType = "premium",
+            }
+            -- Set ke semua environment yang runtime bisa baca
+            pcall(function() rawset(_ge, "__FYY_ACCESS_HANDOFF", _fake_handoff) end)
+            pcall(function() _G["__FYY_ACCESS_HANDOFF"] = _fake_handoff end)
+            pcall(function()
+                if type(shared) == "table" then
+                    shared["__FYY_ACCESS_HANDOFF"] = _fake_handoff
+                end
+            end)
+            warn("[FyyBypass] HANDOFF injected — accessTier=premium")
+        else
+            warn("[FyyBypass] HANDOFF sudah ada — OK")
+        end
+    end)
     local StarterGui = game:GetService("StarterGui")
     pcall(function() StarterGui:SetCore("SendNotification", {Title="FyyCommunity ✅", Text="Executor: "..executor, Duration=5}) end)
     return _ret
