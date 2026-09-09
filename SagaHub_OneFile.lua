@@ -393,6 +393,49 @@ do
     -- Guard: skip jika bypass sudah aktif (double-execute protection)
     local ge0 = (getgenv and getgenv()) or _G
     warn("[FyyBypass] Bypass block run — PlaceId: " .. tostring(game and game.PlaceId or "?"))
+
+    -- =========================================================
+    -- INTERCEPT queue_on_teleport API (Delta/executor built-in)
+    -- Runtime FyyCommunity memanggil queue_on_teleport() untuk
+    -- menyimpan script yang dijalankan setelah hop server.
+    -- Kita intercept: kalau script berisi fyycommunity.com,
+    -- replace URL-nya dengan SagaHub kita.
+    -- =========================================================
+    pcall(function()
+        local _SAGA_URL = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua"
+        local _orig_qot = rawget(ge0, "queue_on_teleport")
+        if type(_orig_qot) == "function" then
+            rawset(ge0, "queue_on_teleport", function(script_src)
+                if type(script_src) == "string" and script_src:lower():find("fyycommunity%.com") then
+                    warn("[FyyBypass] queue_on_teleport intercepted — replacing URL")
+                    -- Replace loadstring(game:HttpGet("https://fyycommunity.com"))()?
+                    -- Inject script SagaHub langsung
+                    local new_script = 'loadstring(game:HttpGet("' .. _SAGA_URL .. '", true))()'
+                    return _orig_qot(new_script)
+                end
+                return _orig_qot(script_src)
+            end)
+            warn("[FyyBypass] queue_on_teleport hooked")
+        end
+    end)
+
+    -- Juga overwrite file persistence JSON agar disabled
+    -- sehingga runtime tidak baca URL lama dari file
+    pcall(function()
+        local wf = rawget(ge0, "writefile") or rawget(ge0, "writeFile")
+        local mf = rawget(ge0, "makefolder") or rawget(ge0, "makeFolder")
+        local isf = rawget(ge0, "isfolder") or rawget(ge0, "isFolder")
+        if wf then
+            if mf then
+                pcall(function()
+                    if not (isf and isf("FyyCommunity")) then mf("FyyCommunity") end
+                end)
+            end
+            -- Disable persistence file lama agar tidak dipakai runtime
+            pcall(wf, "FyyCommunity/teleport_persistence.json", '{"Version":1,"Enabled":false}')
+            warn("[FyyBypass] Persistence file disabled")
+        end
+    end)
     if rawget(ge0, "__FyyBypassActive") then
         -- Reset session values agar rejoin tetap dapat session baru
         warn("[FyyBypass] Reset bypass state untuk rejoin baru")
