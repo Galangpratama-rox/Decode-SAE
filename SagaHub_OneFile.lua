@@ -399,6 +399,36 @@ do
         rawset(ge0, "__FyyBypassActive", nil)
     end
 
+    -- =========================================================
+    -- INTERCEPT game:HttpGet untuk FyyCommunity.com
+    -- Kalau runtime memanggil game:HttpGet("https://FyyCommunity.com")
+    -- untuk auto-execute di server baru, return SagaHub script kita.
+    -- Ini fix rejoin/hop server minta key.
+    -- =========================================================
+    local _SAGAHUB_URL = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua"
+    local _origHttpGet = nil
+    pcall(function()
+        _origHttpGet = game.HttpGet
+        local function _hookedHttpGet(self, url, nocache)
+            local u = tostring(url or ""):lower()
+            -- Kalau runtime minta FyyCommunity.com (auto-execute) → return script kita
+            if (u == "https://fyycommunity.com" or u == "https://fyycommunity.com/")
+                and not u:find("/api/") then
+                warn("[FyyBypass] HttpGet intercept FyyCommunity.com → redirect ke SagaHub")
+                local ok, src = pcall(function()
+                    return _origHttpGet(game, _SAGAHUB_URL, true)
+                end)
+                if ok and src and #src > 100 then return src end
+            end
+            -- Semua request lain jalan normal
+            return _origHttpGet(self, url, nocache)
+        end
+        if type(hookfunction) == "function" then
+            hookfunction(game.HttpGet, _hookedHttpGet)
+            warn("[FyyBypass] game:HttpGet hooked untuk intercept FyyCommunity auto-execute")
+        end
+    end)
+
     -- Dummy HWID & session values (konsisten per-session)
     local DUMMY_SESSION_ID  = "bypass-session-" .. tostring(math.random(1000000, 9999999))
     local DUMMY_SESSION_TOK = "bypass-token-" .. tostring(math.random(1000000, 9999999))
