@@ -594,6 +594,17 @@ do
 
     -- Hook global getgenv/_G
     local ge = (getgenv and getgenv()) or _G
+
+    -- Simpan request ASLI sebelum di-replace (untuk forward non-fyycommunity)
+    do
+        local _trueOrig = rawget(ge,"request") or rawget(ge,"http_request")
+                       or rawget(ge,"httprequest")
+        if type(_trueOrig) == "function" then
+            rawset(ge, "__FyyOrigRequest", _trueOrig)
+            warn("[FyyBypass] Saved __FyyOrigRequest: " .. tostring(type(_trueOrig)))
+        end
+    end
+
     for _, k in ipairs({"request","http_request","httprequest"}) do
         local orig = rawget(ge, k)
         if type(orig) == "function" then
