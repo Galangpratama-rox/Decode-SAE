@@ -854,122 +854,78 @@ do
 end
 
 -- =========================================================
--- BYPASS INJECTOR: Override Tu669bhFa[(0x5DB)] di dalam payload
--- Tu669bhFa[(0x5DB)] adalah fungsi yang payload pakai untuk
--- mencari request() function dari getgenv/rawget.
--- Kita inject SETELAH loadstring sehingga closure payload
--- mendapat versi yang selalu return fake request kita.
+-- BYPASS INJECTOR: Pastikan __FyyFakeReq sudah di-set
+-- dan rawset ke semua env sebelum payload run.
+-- __FyyFakeReq dibuat oleh bypass block di atas.
 -- =========================================================
 do
-    -- Bangun fake request function yang intercept fyycommunity.com
-    local function _buildFakeReq()
+    local ge = (getgenv and getgenv()) or _G
+    -- Ambil fakeReq yang sudah di-set oleh bypass block
+    local fakeReq = rawget(ge, "__FyyFakeReq")
+    -- Kalau belum ada (edge case), buat baru inline
+    if not fakeReq then
         local hs = game:GetService("HttpService")
-        local sid  = "bs-"..tostring(math.random(1000000,9999999))
-        local stok = "bt-"..tostring(math.random(1000000,9999999))
-        local chal = string.rep("61",32)   -- 64 hex = 32 bytes
-        local cid  = "bc-"..tostring(math.random(100000,999999))
-
         local function J(t)
             local ok,r = pcall(function() return hs:JSONEncode(t) end)
             return ok and r or "{}"
         end
-
-        return function(opts)
-            local url = ""
-            if type(opts) == "table" then
-                url = tostring(opts.Url or opts.url or "")
-            else
-                url = tostring(opts or "")
-            end
-
+        fakeReq = function(opts)
+            local url = type(opts)=="table" and tostring(opts.Url or opts.url or "") or tostring(opts or "")
             if not url:find("fyycommunity%.com") then
-                -- Bukan fyycommunity — pakai request asli kalau ada
-                local ge = (getgenv and getgenv()) or _G
-                for _, k in ipairs({"__FyyOrigRequest","request","http_request","httprequest"}) do
-                    local fn = rawget(ge, k)
-                    if type(fn) == "function" and fn ~= _G[k] then
-                        return fn(opts)
-                    end
+                local orig = rawget(ge,"__FyyOrigRequest")
+                if type(orig)=="function" then return orig(opts) end
+                if type(opts)=="table" and (not opts.Method or opts.Method=="GET") then
+                    local ok2,body = pcall(function() return game:HttpGet(url,true) end)
+                    if ok2 and body then return {StatusCode=200,Status=200,Body=body} end
                 end
-                -- Fallback: game:HttpGet untuk GET tanpa body
-                if type(opts) == "table" and (not opts.Method or opts.Method == "GET") then
-                    local ok2, body = pcall(function()
-                        return game:HttpGet(url, true)
-                    end)
-                    if ok2 and body then
-                        return {StatusCode=200, Status=200, Body=body}
-                    end
-                end
-                return {StatusCode=0, Status=0, Body=""}
+                return {StatusCode=0,Status=0,Body=""}
             end
-
-            -- fyycommunity.com — return fake response
             local u = url:lower()
+            local sid="bs-"..tostring(math.random(1e6,9e6))
+            local stok="bt-"..tostring(math.random(1e6,9e6))
+            local chal=string.rep("61",32)
+            local cid="bc-"..tostring(math.random(1e5,9e5))
             local body
             if u:find("access%-mode") or u:find("loader/access") then
-                body = J({status="ok", data={mode="public_maintenance"}})
+                body=J({status="ok",data={mode="public_maintenance"}})
             elseif u:find("check/challenge") then
-                body = J({status="ok", transportKey=chal, challengeId=cid})
+                body=J({status="ok",transportKey=chal,challengeId=cid})
             elseif u:find("check/maintenance") then
-                body = J({status="ok",
-                    session={sessionId=sid, sessionToken=stok,
+                body=J({status="ok",
+                    session={sessionId=sid,sessionToken=stok,
                              nextHeartbeatSeconds=999999,
-                             accessTier="premium", licenseType="premium"},
+                             accessTier="premium",licenseType="premium"},
                     continuityCredential="bypass",
-                    accessTier="premium", licenseType="premium"})
+                    accessTier="premium",licenseType="premium"})
             elseif u:find("heartbeat") then
-                body = J({status="ok", state="active"})
+                body=J({status="ok",state="active"})
             elseif u:find("/api/v1/check") then
-                body = J({status="ok",
-                    session={sessionId=sid, sessionToken=stok,
+                body=J({status="ok",
+                    session={sessionId=sid,sessionToken=stok,
                              nextHeartbeatSeconds=999999,
-                             accessTier="premium", licenseType="premium"},
+                             accessTier="premium",licenseType="premium"},
                     continuityCredential="bypass"})
             else
-                body = J({status="ok"})
+                body=J({status="ok"})
             end
-            return {StatusCode=200, Status=200, Body=body}
+            return {StatusCode=200,Status=200,Body=body}
         end
+        rawset(ge, "__FyyFakeReq", fakeReq)
     end
 
-    -- Simpan original request sebelum di-override
-    local ge = (getgenv and getgenv()) or _G
+    -- rawset ke semua env agar rawget payload dapat versi hooked
     for _, k in ipairs({"request","http_request","httprequest"}) do
-        local orig = rawget(ge, k)
-        if type(orig) == "function" then
-            rawset(ge, "__FyyOrigRequest", orig)
-            break
-        end
+        if rawget(ge, k) ~= nil then rawset(ge, k, fakeReq) end
     end
-
-    -- Simpan fake request ke getgenv dengan rawset
-    -- sehingga rawget() di dalam payload juga dapat ini
-    local fakeReq = _buildFakeReq()
-    -- KRITIS: set __FyyFakeReq agar Tu669bhFa[(0x5DB)] yang sudah di-patch
-    -- langsung return ini tanpa perlu cek request/http_request
-    rawset(ge, "__FyyFakeReq", fakeReq)
-    for _, k in ipairs({"request","http_request","httprequest"}) do
-        if rawget(ge, k) ~= nil then
-            rawset(ge, k, fakeReq)
-        end
-    end
-    -- Kalau tidak ada satu pun, set "request" langsung
     if not rawget(ge,"request") and not rawget(ge,"http_request") then
         rawset(ge, "request", fakeReq)
     end
-
-    -- Patch root_env dan hH45k3O juga
     for _, env in ipairs({root_env, hH45k3O}) do
         if type(env) == "table" then
             for _, k in ipairs({"request","http_request","httprequest"}) do
-                if rawget(env, k) ~= nil then
-                    rawset(env, k, fakeReq)
-                end
+                if rawget(env,k) ~= nil then rawset(env,k,fakeReq) end
             end
-            -- Kalau kosong, inject langsung
-            if not rawget(env,"request") then
-                rawset(env, "request", fakeReq)
-            end
+            if not rawget(env,"request") then rawset(env,"request",fakeReq) end
         end
     end
 
