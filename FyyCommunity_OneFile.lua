@@ -845,6 +845,137 @@ do
     end)
 end
 
+-- =========================================================
+-- BYPASS INJECTOR: Override Tu669bhFa[(0x5DB)] di dalam payload
+-- Tu669bhFa[(0x5DB)] adalah fungsi yang payload pakai untuk
+-- mencari request() function dari getgenv/rawget.
+-- Kita inject SETELAH loadstring sehingga closure payload
+-- mendapat versi yang selalu return fake request kita.
+-- =========================================================
+do
+    -- Bangun fake request function yang intercept fyycommunity.com
+    local function _buildFakeReq()
+        local hs = game:GetService("HttpService")
+        local sid  = "bs-"..tostring(math.random(1000000,9999999))
+        local stok = "bt-"..tostring(math.random(1000000,9999999))
+        local chal = string.rep("61",32)   -- 64 hex = 32 bytes
+        local cid  = "bc-"..tostring(math.random(100000,999999))
+
+        local function J(t)
+            local ok,r = pcall(function() return hs:JSONEncode(t) end)
+            return ok and r or "{}"
+        end
+
+        return function(opts)
+            local url = ""
+            if type(opts) == "table" then
+                url = tostring(opts.Url or opts.url or "")
+            else
+                url = tostring(opts or "")
+            end
+
+            if not url:find("fyycommunity%.com") then
+                -- Bukan fyycommunity — pakai request asli kalau ada
+                local ge = (getgenv and getgenv()) or _G
+                for _, k in ipairs({"__FyyOrigRequest","request","http_request","httprequest"}) do
+                    local fn = rawget(ge, k)
+                    if type(fn) == "function" and fn ~= _G[k] then
+                        return fn(opts)
+                    end
+                end
+                -- Fallback: game:HttpGet untuk GET tanpa body
+                if type(opts) == "table" and (not opts.Method or opts.Method == "GET") then
+                    local ok2, body = pcall(function()
+                        return game:HttpGet(url, true)
+                    end)
+                    if ok2 and body then
+                        return {StatusCode=200, Status=200, Body=body}
+                    end
+                end
+                return {StatusCode=0, Status=0, Body=""}
+            end
+
+            -- fyycommunity.com — return fake response
+            local u = url:lower()
+            local body
+            if u:find("access%-mode") or u:find("loader/access") then
+                body = J({status="ok", data={mode="public_maintenance"}})
+            elseif u:find("check/challenge") then
+                body = J({status="ok", transportKey=chal, challengeId=cid})
+            elseif u:find("check/maintenance") then
+                body = J({status="ok",
+                    session={sessionId=sid, sessionToken=stok,
+                             nextHeartbeatSeconds=999999,
+                             accessTier="premium", licenseType="premium"},
+                    continuityCredential="bypass",
+                    accessTier="premium", licenseType="premium"})
+            elseif u:find("heartbeat") then
+                body = J({status="ok", state="active"})
+            elseif u:find("/api/v1/check") then
+                body = J({status="ok",
+                    session={sessionId=sid, sessionToken=stok,
+                             nextHeartbeatSeconds=999999,
+                             accessTier="premium", licenseType="premium"},
+                    continuityCredential="bypass"})
+            else
+                body = J({status="ok"})
+            end
+            return {StatusCode=200, Status=200, Body=body}
+        end
+    end
+
+    -- Simpan original request sebelum di-override
+    local ge = (getgenv and getgenv()) or _G
+    for _, k in ipairs({"request","http_request","httprequest"}) do
+        local orig = rawget(ge, k)
+        if type(orig) == "function" then
+            rawset(ge, "__FyyOrigRequest", orig)
+            break
+        end
+    end
+
+    -- Simpan fake request ke getgenv dengan rawset
+    -- sehingga rawget() di dalam payload juga dapat ini
+    local fakeReq = _buildFakeReq()
+    for _, k in ipairs({"request","http_request","httprequest"}) do
+        if rawget(ge, k) ~= nil then
+            rawset(ge, k, fakeReq)
+        end
+    end
+    -- Kalau tidak ada satu pun, set "request" langsung
+    if not rawget(ge,"request") and not rawget(ge,"http_request") then
+        rawset(ge, "request", fakeReq)
+    end
+
+    -- Patch root_env dan hH45k3O juga
+    for _, env in ipairs({root_env, hH45k3O}) do
+        if type(env) == "table" then
+            for _, k in ipairs({"request","http_request","httprequest"}) do
+                if rawget(env, k) ~= nil then
+                    rawset(env, k, fakeReq)
+                end
+            end
+            -- Kalau kosong, inject langsung
+            if not rawget(env,"request") then
+                rawset(env, "request", fakeReq)
+            end
+        end
+    end
+
+    -- Simpan file bypass key agar auto-load saat rejoin
+    pcall(function()
+        local wf  = rawget(ge,"writefile")  or rawget(ge,"writeFile")
+        local mf  = rawget(ge,"makefolder") or rawget(ge,"makeFolder")
+        local isf = rawget(ge,"isfolder")   or rawget(ge,"isFolder")
+        if wf then
+            if mf then pcall(function()
+                if not (isf and isf("FyyCommunity")) then mf("FyyCommunity") end
+            end) end
+            pcall(wf, "FyyCommunity/license.key", "BYPASS-AUTO-KEY")
+        end
+    end)
+end
+
 local _ok, _ret = pcall(__FYY_PAYLOAD_FN, root_env)
 if _ok then
     local StarterGui = game:GetService("StarterGui")
