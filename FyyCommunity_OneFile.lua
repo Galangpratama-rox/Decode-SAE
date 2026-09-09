@@ -392,8 +392,10 @@ end
 do
     -- Guard: skip jika bypass sudah aktif (double-execute protection)
     local ge0 = (getgenv and getgenv()) or _G
+    warn("[FyyBypass] Bypass block run — PlaceId: " .. tostring(game and game.PlaceId or "?"))
     if rawget(ge0, "__FyyBypassActive") then
         -- Reset session values agar rejoin tetap dapat session baru
+        warn("[FyyBypass] Reset bypass state untuk rejoin baru")
         rawset(ge0, "__FyyBypassActive", nil)
     end
 
@@ -437,6 +439,8 @@ do
     local function fake_response(url, method)
         -- Normalise URL
         local u = tostring(url or ""):lower()
+        -- DEBUG: log setiap intercept ke fyycommunity.com
+        warn("[FyyBypass] INTERCEPT >> " .. tostring(url))
         
         -- /api/v1/loader/access-mode -> mode = public_maintenance (keyless)
         if u:find("access%-mode") or u:find("access_mode") or u:find("loader/access") then
@@ -568,6 +572,76 @@ do
     pcall(function()
         local ge2 = (getgenv and getgenv()) or _G
         rawset(ge2, "__FyyBypassActive", true)
+    end)
+
+
+    -- =========================================================
+    -- HOOKFUNCTION: intercept di level object fungsi asli
+    -- Bekerja pada executor yg support hookfunction (Synapse/Wave/Hydrogen)
+    -- Memastikan caller di game runtime juga pakai fakeReq
+    -- =========================================================
+    do
+        local _ge_hk = (getgenv and getgenv()) or _G
+        local _fake_ref = rawget(_ge_hk, "__FyyFakeReq")
+        if _fake_ref then
+            for _, _hkname in ipairs({"request","http_request","httprequest"}) do
+                local _orig_fn = rawget(_ge_hk, _hkname)
+                if type(_orig_fn) == "function" and _orig_fn ~= _fake_ref then
+                    pcall(function()
+                        if type(hookfunction) == "function" then
+                            hookfunction(_orig_fn, _fake_ref)
+                            warn("[FyyBypass] hookfunction -> " .. _hkname)
+                        end
+                    end)
+                end
+            end
+            -- syn.request style executor
+            pcall(function()
+                local _syn = rawget(_ge_hk, "syn")
+                if type(_syn)=="table" and type(rawget(_syn,"request"))=="function" then
+                    if type(hookfunction)=="function" then
+                        hookfunction(rawget(_syn,"request"), _fake_ref)
+                        warn("[FyyBypass] hookfunction -> syn.request")
+                    end
+                end
+            end)
+        end
+    end
+
+    -- =========================================================
+    -- PERSISTENT __newindex: cegah siapapun override request
+    -- setelah bypass block selesai (termasuk game runtime loader)
+    -- =========================================================
+    pcall(function()
+        local _ge3 = (getgenv and getgenv()) or _G
+        local _fake3 = rawget(_ge3, "__FyyFakeReq")
+        if not _fake3 then return end
+        if type(getrawmetatable) ~= "function" then
+            warn("[FyyBypass] getrawmetatable tidak tersedia — skip __newindex hook")
+            return
+        end
+        local _mt = getrawmetatable(_ge3)
+        if not _mt then return end
+        local _orig_ni = rawget(_mt, "__newindex")
+        local function _bypass_ni(t, k, v)
+            if k == "request" or k == "http_request" or k == "httprequest" then
+                local _env = (getgenv and getgenv()) or _G
+                local _cur_fake = rawget(_env, "__FyyFakeReq")
+                if _cur_fake and v ~= _cur_fake then
+                    rawset(t, k, _cur_fake)
+                    warn("[FyyBypass] Override blocked: " .. tostring(k))
+                    return
+                end
+            end
+            if type(_orig_ni) == "function" then
+                return _orig_ni(t, k, v)
+            end
+            rawset(t, k, v)
+        end
+        if type(setrawmetatable) == "function" then
+            rawset(_mt, "__newindex", _bypass_ni)
+            warn("[FyyBypass] Persistent __newindex hook aktif")
+        end
     end)
 end
 -- ============================================================
@@ -847,7 +921,7 @@ do
                     pcall(mf, "FyyCommunity")
                 end
             end
-            pcall(wf, "FyyCommunity/license.key", "BYPASS-AUTO-KEY")
+            pcall(wf, "FyyCommunity/license.key", "FYY-BYPASS-KEYLESS")
         end
     end)
 end
@@ -937,9 +1011,31 @@ do
             if mf then pcall(function()
                 if not (isf and isf("FyyCommunity")) then mf("FyyCommunity") end
             end) end
-            pcall(wf, "FyyCommunity/license.key", "BYPASS-AUTO-KEY")
+            pcall(wf, "FyyCommunity/license.key", "FYY-BYPASS-KEYLESS")
         end
     end)
+
+    -- INJECTOR: hookfunction terakhir sebelum payload run
+    -- Ini memastikan bahkan setelah semua rawset, fungsi asli pun ter-intercept
+    do
+        local _inj_ge = (getgenv and getgenv()) or _G
+        local _inj_fake = rawget(_inj_ge, "__FyyFakeReq") or fakeReq
+        if _inj_fake then
+            rawset(_inj_ge, "request", _inj_fake)
+            rawset(_inj_ge, "__FyyFakeReq", _inj_fake)
+            for _, _k in ipairs({"request","http_request","httprequest"}) do
+                local _f = rawget(_inj_ge, _k)
+                if type(_f) == "function" and _f ~= _inj_fake then
+                    pcall(function()
+                        if type(hookfunction) == "function" then
+                            hookfunction(_f, _inj_fake)
+                        end
+                    end)
+                end
+            end
+            warn("[FyyBypass] INJECTOR done — request pinned to fakeReq")
+        end
+    end
 end
 
 local _ok, _ret = pcall(__FYY_PAYLOAD_FN, root_env)
