@@ -383,6 +383,174 @@ do
     root_env.__FyyOneFile = true
 end
 
+-- ============================================================
+-- [BYPASS] Key System Bypass — Auto Keyless Mode
+-- Intercept HTTP requests ke fyycommunity.com API
+-- Semua endpoint otomatis return response yang valid
+-- ============================================================
+do
+    local _orig_request = nil
+    local _orig_HttpGet = nil
+    
+    -- Cari request function yang dipakai payload
+    local function get_request_fn()
+        local ge = (getgenv and getgenv()) or _G
+        return rawget(ge, "request")
+            or rawget(ge, "http_request")
+            or rawget(ge, "httprequest")
+            or (rawget(ge, "syn") and rawget(ge, "syn").request)
+            or (rawget(ge, "http") and rawget(ge, "http").request)
+    end
+    
+    -- Dummy HWID & session values
+    local DUMMY_HWID        = "bypass-hwid-" .. tostring(math.random(100000, 999999))
+    local DUMMY_SESSION_ID  = "bypass-session-" .. tostring(math.random(1000000, 9999999))
+    local DUMMY_SESSION_TOK = "bypass-token-" .. tostring(math.random(1000000, 9999999))
+    local DUMMY_CHALLENGE   = string.rep("61", 32)  -- 64 hex chars -> 32 bytes setelah decode
+    local DUMMY_CHALLENGE_ID= "bypass-challenge-" .. tostring(math.random(100000, 999999))
+    
+    -- Respon dummy per endpoint
+    local function make_response(status, body_table)
+        local ok, hs = pcall(function() return game:GetService("HttpService") end)
+        local body = ""
+        if ok and hs then
+            pcall(function() body = hs:JSONEncode(body_table) end)
+        end
+        if body == "" then
+            -- Manual JSON build untuk kasus sederhana
+            if type(body_table) == "table" then
+                local parts = {}
+                local function enc(v)
+                    if type(v) == "string" then return '"'..v..'"'
+                    elseif type(v) == "number" then return tostring(v)
+                    elseif type(v) == "boolean" then return tostring(v)
+                    elseif type(v) == "table" then
+                        local p = {}
+                        for k2,v2 in pairs(v) do
+                            table.insert(p, '"'..tostring(k2)..'":'..enc(v2))
+                        end
+                        return '{'..table.concat(p,',')..'}'
+                    end
+                    return "null"
+                end
+                body = enc(body_table)
+            end
+        end
+        return { StatusCode = status, Status = status, Body = body }
+    end
+    
+    -- Fake API responses berdasarkan URL
+    local function fake_response(url, method)
+        -- Normalise URL
+        local u = tostring(url or ""):lower()
+        
+        -- /api/v1/loader/access-mode -> mode = public_maintenance (keyless)
+        if u:find("access%-mode") or u:find("access_mode") or u:find("loader/access") then
+            return make_response(200, {
+                status = "ok",
+                data = { mode = "public_maintenance" }
+            })
+        end
+        
+        -- /api/v1/check/challenge -> return transportKey dummy
+        if u:find("check/challenge") then
+            return make_response(200, {
+                status = "ok",
+                transportKey = DUMMY_CHALLENGE,
+                challengeId  = DUMMY_CHALLENGE_ID
+            })
+        end
+        
+        -- /api/v1/check/maintenance (keyless session create)
+        if u:find("check/maintenance") then
+            return make_response(200, {
+                status = "ok",
+                session = {
+                    sessionId    = DUMMY_SESSION_ID,
+                    sessionToken = DUMMY_SESSION_TOK,
+                    nextHeartbeatSeconds = 999999,
+                    accessTier   = "premium",
+                    licenseType  = "premium",
+                },
+                continuityCredential = "bypass-continuity",
+                accessTier   = "premium",
+                licenseType  = "premium",
+            })
+        end
+        
+        -- /api/v1/check/heartbeat/* -> return active state
+        if u:find("heartbeat") then
+            return make_response(200, {
+                status = "ok",
+                state  = "active",
+            })
+        end
+        
+        -- /api/v1/check (license validate) -> return success session
+        if u:find("/api/v1/check") then
+            return make_response(200, {
+                status = "ok",
+                session = {
+                    sessionId    = DUMMY_SESSION_ID,
+                    sessionToken = DUMMY_SESSION_TOK,
+                    nextHeartbeatSeconds = 999999,
+                    accessTier   = "premium",
+                    licenseType  = "premium",
+                },
+                continuityCredential = "bypass-continuity",
+            })
+        end
+        
+        -- /api/v1/script-distribution/runtime/resolve -> let it fail (real CDN used)
+        -- Return nil so payload falls back to real CDN routes
+        return nil
+    end
+    
+    -- Hook request function
+    local req_fn = get_request_fn()
+    if req_fn then
+        local original_req = req_fn
+        local function hooked_request(opts)
+            local url = type(opts) == "table" and (opts.Url or opts.url or "") or tostring(opts)
+            if tostring(url):find("fyycommunity%.com") then
+                local fake = fake_response(url, opts.Method or opts.method or "GET")
+                if fake then return fake end
+            end
+            return original_req(opts)
+        end
+        -- Override in all possible locations
+        local ge = (getgenv and getgenv()) or _G
+        if rawget(ge, "request") then ge.request = hooked_request end
+        if rawget(ge, "http_request") then ge.http_request = hooked_request end
+        if rawget(ge, "httprequest") then ge.httprequest = hooked_request end
+        if rawget(ge, "syn") and type(rawget(ge, "syn")) == "table" then
+            pcall(function()
+                local orig_syn = rawget(ge, "syn")
+                ge.syn = setmetatable({}, {
+                    __index = function(_, k)
+                        if k == "request" then return hooked_request end
+                        return orig_syn[k]
+                    end
+                })
+            end)
+        end
+        -- Patch root_env (hH45k3O yang dipakai payload)
+        if type(root_env) == "table" then
+            if root_env.request then root_env.request = hooked_request end
+        end
+    end
+    
+    -- Also hook game:HttpGet for CDN downloads (game runtime) — leave them untouched
+    -- We only hook fyycommunity.com requests
+    
+    print("[FyyBypass] Key bypass aktif — mode: public_maintenance (keyless)")
+end
+-- ============================================================
+-- END BYPASS
+-- ============================================================
+
+
+
 
 -- ============================================================
 -- [SECTION 5/5] EXECUTE PAYLOAD (semi_deobfuscated.lua 84KB)
