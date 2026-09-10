@@ -389,22 +389,22 @@ end
 -- Semua endpoint otomatis return response yang valid
 -- Robust: hook semua request path + hH45k3O injection
 -- ============================================================
+-- Simpan request ASLI sebelum bypass block jalan
+-- HARUS di sini, sebelum hookfunction replace request
+do
+    local _ge_pre = (getgenv and getgenv()) or _G
+    local _pre_req = rawget(_ge_pre, "request")
+                  or rawget(_ge_pre, "http_request")
+                  or rawget(_ge_pre, "httprequest")
+    if type(_pre_req) == "function" then
+        rawset(_ge_pre, "__FyyTrueRequest", _pre_req)
+    end
+end
+
 do
     -- Guard: skip jika bypass sudah aktif (double-execute protection)
     local ge0 = (getgenv and getgenv()) or _G
     warn("[FyyBypass] Bypass block run — PlaceId: " .. tostring(game and game.PlaceId or "?"))
-
-    -- Simpan TRUE request PERTAMA sebelum bypass replace apapun
-    -- Monitor dan fitur lain butuh ini untuk kirim HTTP ke luar
-    do
-        local _ge_early = (getgenv and getgenv()) or _G
-        local _true_req = rawget(_ge_early, "request")
-                       or rawget(_ge_early, "http_request")
-                       or rawget(_ge_early, "httprequest")
-        if type(_true_req) == "function" then
-            rawset(_ge_early, "__FyyTrueRequest", _true_req)
-        end
-    end
 
     -- =========================================================
     -- INTERCEPT queue_on_teleport API (Delta/executor built-in)
