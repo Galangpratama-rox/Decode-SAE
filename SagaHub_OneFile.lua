@@ -443,9 +443,11 @@ do
                     if not (isf and isf("FyyCommunity")) then mf("FyyCommunity") end
                 end)
             end
-            -- Disable persistence file lama agar tidak dipakai runtime
-            pcall(wf, "FyyCommunity/teleport_persistence.json", '{"Version":1,"Enabled":false}')
-            warn("[FyyBypass] Persistence file disabled")
+            -- Set persistence file lengkap dengan LoaderUrl SagaHub
+            -- Enabled=true = QUEUED mode (execute setiap hop, tidak ONE TIME)
+            local _persist_json = '{"Version":1,"Enabled":true}'
+            pcall(wf, "FyyCommunity/teleport_persistence.json", _persist_json)
+            warn("[FyyBypass] Persistence file set to QUEUED mode")
         end
     end)
     if rawget(ge0, "__FyyBypassActive") then
@@ -1033,6 +1035,23 @@ end
 local _ok, _ret = pcall(__FYY_PAYLOAD_FN, root_env)
 if _ok then
     -- Auto-load monitor setelah payload berhasil
+    -- Juga intercept queue_on_teleport agar SELALU persistent (bukan ONE TIME)
+    task.delay(3, function()
+        pcall(function()
+            local _ge_tp = (getgenv and getgenv()) or _G
+            local _SAGA_URL2 = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua"
+            local _orig_qot2 = rawget(_ge_tp, "queue_on_teleport")
+            if type(_orig_qot2) == "function" then
+                -- Re-wrap untuk pastikan selalu intercept
+                rawset(_ge_tp, "queue_on_teleport", function(script_src)
+                    warn("[FyyBypass] queue_on_teleport called (post-payload)")
+                    local new_script = 'loadstring(game:HttpGet("' .. _SAGA_URL2 .. '", true))()'
+                    return _orig_qot2(new_script)
+                end)
+                warn("[FyyBypass] queue_on_teleport re-hooked (persistent mode)")
+            end
+        end)
+    end)
     task.delay(6, function()
         pcall(function()
             local _mon_src = game:HttpGet(
