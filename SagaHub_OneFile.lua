@@ -644,39 +644,6 @@ do
     end)
 
 
-    -- =========================================================
-    -- HOOKFUNCTION: intercept di level object fungsi asli
-    -- Bekerja pada executor yg support hookfunction (Synapse/Wave/Hydrogen)
-    -- Memastikan caller di game runtime juga pakai fakeReq
-    -- =========================================================
-    do
-        local _ge_hk = (getgenv and getgenv()) or _G
-        local _fake_ref = rawget(_ge_hk, "__FyyFakeReq")
-        if _fake_ref then
-            for _, _hkname in ipairs({"request","http_request","httprequest"}) do
-                local _orig_fn = rawget(_ge_hk, _hkname)
-                if type(_orig_fn) == "function" and _orig_fn ~= _fake_ref then
-                    pcall(function()
-                        if type(hookfunction) == "function" then
-                            hookfunction(_orig_fn, _fake_ref)
-                            warn("[FyyBypass] hookfunction -> " .. _hkname)
-                        end
-                    end)
-                end
-            end
-            -- syn.request style executor
-            pcall(function()
-                local _syn = rawget(_ge_hk, "syn")
-                if type(_syn)=="table" and type(rawget(_syn,"request"))=="function" then
-                    if type(hookfunction)=="function" then
-                        hookfunction(rawget(_syn,"request"), _fake_ref)
-                        warn("[FyyBypass] hookfunction -> syn.request")
-                    end
-                end
-            end)
-        end
-    end
-
 end
 -- ============================================================
 -- END BYPASS
@@ -1049,24 +1016,15 @@ do
         end
     end)
 
-    -- INJECTOR: hookfunction terakhir sebelum payload run
-    -- Ini memastikan bahkan setelah semua rawset, fungsi asli pun ter-intercept
+    -- INJECTOR: pin request ke fakeReq via rawset
     do
         local _inj_ge = (getgenv and getgenv()) or _G
         local _inj_fake = rawget(_inj_ge, "__FyyFakeReq") or fakeReq
         if _inj_fake then
             rawset(_inj_ge, "request", _inj_fake)
             rawset(_inj_ge, "__FyyFakeReq", _inj_fake)
-            for _, _k in ipairs({"request","http_request","httprequest"}) do
-                local _f = rawget(_inj_ge, _k)
-                if type(_f) == "function" and _f ~= _inj_fake then
-                    pcall(function()
-                        if type(hookfunction) == "function" then
-                            hookfunction(_f, _inj_fake)
-                        end
-                    end)
-                end
-            end
+            if rawget(_inj_ge,"http_request") then rawset(_inj_ge,"http_request",_inj_fake) end
+            if rawget(_inj_ge,"httprequest") then rawset(_inj_ge,"httprequest",_inj_fake) end
             warn("[FyyBypass] INJECTOR done — request pinned to fakeReq")
         end
     end
