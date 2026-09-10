@@ -578,26 +578,52 @@ do
                     type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET")
                 if fake then return fake end
             end
-            -- Non-fyycommunity (mis: games.roblox.com untuk server list)
-            -- Coba orig_fn dulu
+            -- Non-fyycommunity: coba request asli executor dulu
             if type(orig_fn) == "function" then
                 local ok_r, res_r = pcall(orig_fn, opts)
-                if ok_r and res_r then return res_r end
+                if ok_r and res_r and (res_r.StatusCode or 0) > 0 then
+                    return res_r
+                end
             end
             -- Fallback: __FyyOrigRequest
             local _ge_fb = (getgenv and getgenv()) or _G
             local _orig_fb = rawget(_ge_fb, "__FyyOrigRequest")
-            if type(_orig_fb) == "function" then
+            if type(_orig_fb) == "function" and _orig_fb ~= orig_fn then
                 local ok_r2, res_r2 = pcall(_orig_fb, opts)
-                if ok_r2 and res_r2 then return res_r2 end
+                if ok_r2 and res_r2 and (res_r2.StatusCode or 0) > 0 then
+                    return res_r2
+                end
             end
-            -- Last fallback: game:HttpGet untuk GET requests
+            -- Intercept games.roblox.com/servers -> generate dari Roblox API
+            if url:find("games%.roblox%.com") and url:find("servers") then
+                local ok_srv, srv_body = pcall(function()
+                    local hs = game:GetService("HttpService")
+                    local ts = game:GetService("TeleportService")
+                    -- Gunakan Roblox internal API via game:HttpGet
+                    local api_url = url
+                    local ok_hg, body_hg = pcall(function()
+                        return game:HttpGet(api_url, true)
+                    end)
+                    if ok_hg and body_hg and #body_hg > 10 then
+                        return body_hg
+                    end
+                    -- Fallback: buat response kosong tapi valid
+                    -- Runtime akan show "No available servers" tapi tidak error
+                    return hs:JSONEncode({data = {}})
+                end)
+                if ok_srv and srv_body then
+                    return {StatusCode=200, Status=200, Body=srv_body}
+                end
+                -- Minimal valid response
+                return {StatusCode=200, Status=200, Body='{"data":[]}'}
+            end
+            -- game:HttpGet fallback untuk GET
             local method = type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET"
             if method == "GET" then
                 local ok_hg, body_hg = pcall(function()
                     return game:HttpGet(url, true)
                 end)
-                if ok_hg and body_hg then
+                if ok_hg and body_hg and #body_hg > 0 then
                     return {StatusCode=200, Status=200, Body=body_hg}
                 end
             end
