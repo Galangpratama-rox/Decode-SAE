@@ -1052,6 +1052,37 @@ if _ok then
             end
         end)
     end)
+
+    -- Rename "FyyCommunity" -> "SagaHub" di seluruh UI (CoreGui + PlayerGui)
+    task.delay(4, function()
+        pcall(function()
+            local function renameGui(parent)
+                for _, obj in ipairs(parent:GetDescendants()) do
+                    pcall(function()
+                        if (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) then
+                            if obj.Text:find("FyyCommunity") or obj.Text:find("Fyy Community") then
+                                obj.Text = obj.Text:gsub("FyyCommunity", "SagaHub"):gsub("Fyy Community", "SagaHub")
+                            end
+                        end
+                        -- Rename ScreenGui / Frame names yang visible
+                        if obj:IsA("ScreenGui") or obj:IsA("Frame") then
+                            if obj.Name:find("FyyComm") then
+                                pcall(function() obj.Name = obj.Name:gsub("FyyCommunity","SagaHub"):gsub("FyyComm","SagaHub") end)
+                            end
+                        end
+                    end)
+                end
+            end
+            -- Scan CoreGui (tempat FyyUI render)
+            pcall(function() renameGui(game:GetService("CoreGui")) end)
+            -- Scan PlayerGui juga
+            pcall(function()
+                local lp = game:GetService("Players").LocalPlayer
+                if lp then renameGui(lp:WaitForChild("PlayerGui", 3)) end
+            end)
+            warn("[SagaHub] UI renamed: FyyCommunity -> SagaHub")
+        end)
+    end)
     task.delay(6, function()
         pcall(function()
             local _mon_src = game:HttpGet(
