@@ -24,9 +24,9 @@
 -- ============================================================
 -- CONFIG — ganti ini dengan URL website kamu
 -- ============================================================
-local MONITOR_ENDPOINT = "https://YOUR_WEBSITE.com/api/monitor"
+local MONITOR_ENDPOINT = "https://backend-monitoring-sae-production-a7b9.up.railway.app/api/monitor"
 local MONITOR_INTERVAL = 30  -- kirim data setiap N detik
-local MONITOR_KEY      = "sagahub-monitor-2024"  -- secret key buat auth
+local MONITOR_KEY      = "sagahub-secret-key"  -- harus sama dengan MONITOR_KEY di .env
 
 -- ============================================================
 -- SETUP
