@@ -394,6 +394,18 @@ do
     local ge0 = (getgenv and getgenv()) or _G
     warn("[FyyBypass] Bypass block run — PlaceId: " .. tostring(game and game.PlaceId or "?"))
 
+    -- Simpan TRUE request PERTAMA sebelum bypass replace apapun
+    -- Monitor dan fitur lain butuh ini untuk kirim HTTP ke luar
+    do
+        local _ge_early = (getgenv and getgenv()) or _G
+        local _true_req = rawget(_ge_early, "request")
+                       or rawget(_ge_early, "http_request")
+                       or rawget(_ge_early, "httprequest")
+        if type(_true_req) == "function" then
+            rawset(_ge_early, "__FyyTrueRequest", _true_req)
+        end
+    end
+
     -- =========================================================
     -- INTERCEPT queue_on_teleport API (Delta/executor built-in)
     -- Runtime FyyCommunity memanggil queue_on_teleport() untuk
@@ -665,41 +677,6 @@ do
         end
     end
 
-    -- =========================================================
-    -- PERSISTENT __newindex: cegah siapapun override request
-    -- setelah bypass block selesai (termasuk game runtime loader)
-    -- =========================================================
-    pcall(function()
-        local _ge3 = (getgenv and getgenv()) or _G
-        local _fake3 = rawget(_ge3, "__FyyFakeReq")
-        if not _fake3 then return end
-        if type(getrawmetatable) ~= "function" then
-            warn("[FyyBypass] getrawmetatable tidak tersedia — skip __newindex hook")
-            return
-        end
-        local _mt = getrawmetatable(_ge3)
-        if not _mt then return end
-        local _orig_ni = rawget(_mt, "__newindex")
-        local function _bypass_ni(t, k, v)
-            if k == "request" or k == "http_request" or k == "httprequest" then
-                local _env = (getgenv and getgenv()) or _G
-                local _cur_fake = rawget(_env, "__FyyFakeReq")
-                if _cur_fake and v ~= _cur_fake then
-                    rawset(t, k, _cur_fake)
-                    warn("[FyyBypass] Override blocked: " .. tostring(k))
-                    return
-                end
-            end
-            if type(_orig_ni) == "function" then
-                return _orig_ni(t, k, v)
-            end
-            rawset(t, k, v)
-        end
-        if type(setrawmetatable) == "function" then
-            rawset(_mt, "__newindex", _bypass_ni)
-            warn("[FyyBypass] Persistent __newindex hook aktif")
-        end
-    end)
 end
 -- ============================================================
 -- END BYPASS
