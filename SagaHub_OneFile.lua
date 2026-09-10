@@ -394,6 +394,18 @@ do
     local ge0 = (getgenv and getgenv()) or _G
     warn("[FyyBypass] Bypass block run — PlaceId: " .. tostring(game and game.PlaceId or "?"))
 
+    -- Simpan TRUE origRequest sebelum apapun di-replace
+    -- Ini HARUS jadi yang pertama di bypass block
+    do
+        local _ge_early = (getgenv and getgenv()) or _G
+        local _true_req = rawget(_ge_early, "request")
+                       or rawget(_ge_early, "http_request")
+                       or rawget(_ge_early, "httprequest")
+        if type(_true_req) == "function" then
+            rawset(_ge_early, "__FyyTrueRequest", _true_req)
+        end
+    end
+
     -- =========================================================
     -- INTERCEPT queue_on_teleport API (Delta/executor built-in)
     -- Runtime FyyCommunity memanggil queue_on_teleport() untuk
@@ -578,46 +590,27 @@ do
                     type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET")
                 if fake then return fake end
             end
-            -- Non-fyycommunity: coba request asli executor dulu
-            if type(orig_fn) == "function" then
-                local ok_r, res_r = pcall(orig_fn, opts)
-                if ok_r and res_r and (res_r.StatusCode or 0) > 0 then
-                    return res_r
-                end
-            end
-            -- Fallback: __FyyOrigRequest
+            -- Non-fyycommunity: gunakan __FyyTrueRequest (disimpan sebelum bypass)
             local _ge_fb = (getgenv and getgenv()) or _G
-            local _orig_fb = rawget(_ge_fb, "__FyyOrigRequest")
-            if type(_orig_fb) == "function" and _orig_fb ~= orig_fn then
-                local ok_r2, res_r2 = pcall(_orig_fb, opts)
-                if ok_r2 and res_r2 and (res_r2.StatusCode or 0) > 0 then
-                    return res_r2
-                end
-            end
-            -- Intercept games.roblox.com/servers -> generate dari Roblox API
-            if url:find("games%.roblox%.com") and url:find("servers") then
-                local ok_srv, srv_body = pcall(function()
-                    local hs = game:GetService("HttpService")
-                    local ts = game:GetService("TeleportService")
-                    -- Gunakan Roblox internal API via game:HttpGet
-                    local api_url = url
-                    local ok_hg, body_hg = pcall(function()
-                        return game:HttpGet(api_url, true)
-                    end)
-                    if ok_hg and body_hg and #body_hg > 10 then
-                        return body_hg
+            -- Coba dalam urutan: TrueRequest -> OrigRequest -> orig_fn
+            local _true_req = rawget(_ge_fb, "__FyyTrueRequest")
+            local _orig_req = rawget(_ge_fb, "__FyyOrigRequest")
+
+            for _, _try_fn in ipairs({_true_req, _orig_req, orig_fn}) do
+                if type(_try_fn) == "function" then
+                    -- Skip kalau sama dengan fakeReq (circular)
+                    local _fake = rawget(_ge_fb, "__FyyFakeReq")
+                    if _try_fn ~= _fake then
+                        local ok_r, res_r = pcall(_try_fn, opts)
+                        if ok_r and res_r and type(res_r) == "table" then
+                            local sc = res_r.StatusCode or res_r.Status or 0
+                            if sc > 0 then return res_r end
+                        end
                     end
-                    -- Fallback: buat response kosong tapi valid
-                    -- Runtime akan show "No available servers" tapi tidak error
-                    return hs:JSONEncode({data = {}})
-                end)
-                if ok_srv and srv_body then
-                    return {StatusCode=200, Status=200, Body=srv_body}
                 end
-                -- Minimal valid response
-                return {StatusCode=200, Status=200, Body='{"data":[]}'}
             end
-            -- game:HttpGet fallback untuk GET
+
+            -- game:HttpGet untuk GET (last resort)
             local method = type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET"
             if method == "GET" then
                 local ok_hg, body_hg = pcall(function()
@@ -627,6 +620,13 @@ do
                     return {StatusCode=200, Status=200, Body=body_hg}
                 end
             end
+
+            -- games.roblox.com/servers: return valid empty response
+            -- biar tidak error, runtime tampilkan "No servers found"
+            if url:find("games%.roblox%.com") and url:find("server") then
+                return {StatusCode=200, Status=200, Body='{"data":[]}'}
+            end
+
             return {StatusCode=0,Status=0,Body=""}
         end
     end
