@@ -47,28 +47,58 @@ local handoff = rawget(ge, "__FYY_ACCESS_HANDOFF")
     or _G["__FYY_ACCESS_HANDOFF"]
     or (type(shared) == "table" and shared["__FYY_ACCESS_HANDOFF"])
 
--- Ambil request function — HARUS request asli, bukan fakeReq
--- Coba __FyyTrueRequest dulu (disimpan sebelum bypass)
-local reqFn = rawget(ge, "__FyyTrueRequest")
-          or rawget(ge, "__FyyOrigRequest")
+-- Ambil request function — pakai HttpService:RequestAsync langsung
+-- Ini TIDAK bisa di-intercept oleh fakeReq karena bukan dari getgenv()
+local function doRequest(url, method, headers, body)
+    local hs2 = game:GetService("HttpService")
+    -- Coba HttpService:RequestAsync (tidak semua executor support)
+    local ok1, res1 = pcall(function()
+        return hs2:RequestAsync({
+            Url     = url,
+            Method  = method or "POST",
+            Headers = headers or {},
+            Body    = body or "",
+        })
+    end)
+    if ok1 and res1 and (res1.StatusCode or 0) > 0 then
+        return res1
+    end
 
--- Kalau tidak ada, cari manual — skip fakeReq
-if type(reqFn) ~= "function" then
-    -- Cari request yang BUKAN __FyyFakeReq
-    local fakeReq = rawget(ge, "__FyyFakeReq")
-    for _, name in ipairs({"request","http_request","httprequest"}) do
-        local fn = rawget(ge, name)
-        if type(fn) == "function" and fn ~= fakeReq then
-            reqFn = fn
-            break
+    -- Fallback: cari request function yang bukan fakeReq
+    local ge2 = (getgenv and getgenv()) or _G
+    local fakeRef = rawget(ge2, "__FyyFakeReq")
+    local reqFns = {
+        rawget(ge2, "__FyyTrueRequest"),
+        rawget(ge2, "__FyyOrigRequest"),
+    }
+    -- Cek semua nama request
+    for _, name in ipairs({"request","http_request","httprequest","syn"}) do
+        local fn = rawget(ge2, name)
+        if type(fn) == "function" and fn ~= fakeRef then
+            table.insert(reqFns, fn)
+        elseif type(fn) == "table" and type(rawget(fn, "request")) == "function" then
+            table.insert(reqFns, rawget(fn, "request"))
         end
     end
+
+    for _, fn in ipairs(reqFns) do
+        if type(fn) == "function" and fn ~= fakeRef then
+            local ok2, res2 = pcall(fn, {
+                Url     = url,
+                Method  = method or "POST",
+                Headers = headers or {},
+                Body    = body or "",
+            })
+            if ok2 and res2 and type(res2) == "table" and (res2.StatusCode or 0) > 0 then
+                return res2
+            end
+        end
+    end
+
+    return nil
 end
 
-if type(reqFn) ~= "function" then
-    warn("[SagaMonitor] request function tidak tersedia")
-    return
-end
+warn("[SagaMonitor] Request method siap")
 
 -- ============================================================
 -- DATA COLLECTOR — kumpulkan semua info dari game
@@ -183,17 +213,19 @@ local function sendMonitorData()
         return false
     end
 
-    local req_ok, resp = pcall(reqFn, {
-        Url     = MONITOR_ENDPOINT,
-        Method  = "POST",
-        Headers = {
-            ["Content-Type"] = "application/json",
-            ["X-Monitor-Key"] = MONITOR_KEY,
-        },
-        Body    = encoded,
-    })
+    local req_ok, resp = pcall(function()
+        return doRequest(
+            MONITOR_ENDPOINT,
+            "POST",
+            {
+                ["Content-Type"]  = "application/json",
+                ["X-Monitor-Key"] = MONITOR_KEY,
+            },
+            encoded
+        )
+    end)
 
-    if req_ok and resp then
+    if req_ok and resp and type(resp) == "table" then
         local sc = resp.StatusCode or resp.Status or 0
         if sc >= 200 and sc < 300 then
             return true
