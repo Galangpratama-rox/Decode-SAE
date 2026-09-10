@@ -47,12 +47,23 @@ local handoff = rawget(ge, "__FYY_ACCESS_HANDOFF")
     or _G["__FYY_ACCESS_HANDOFF"]
     or (type(shared) == "table" and shared["__FYY_ACCESS_HANDOFF"])
 
--- Ambil request function (pakai origRequest agar tidak di-intercept fakeReq)
+-- Ambil request function — HARUS request asli, bukan fakeReq
+-- Coba __FyyTrueRequest dulu (disimpan sebelum bypass)
 local reqFn = rawget(ge, "__FyyTrueRequest")
           or rawget(ge, "__FyyOrigRequest")
-          or rawget(ge, "request")
-          or rawget(ge, "http_request")
-          or rawget(ge, "httprequest")
+
+-- Kalau tidak ada, cari manual — skip fakeReq
+if type(reqFn) ~= "function" then
+    -- Cari request yang BUKAN __FyyFakeReq
+    local fakeReq = rawget(ge, "__FyyFakeReq")
+    for _, name in ipairs({"request","http_request","httprequest"}) do
+        local fn = rawget(ge, name)
+        if type(fn) == "function" and fn ~= fakeReq then
+            reqFn = fn
+            break
+        end
+    end
+end
 
 if type(reqFn) ~= "function" then
     warn("[SagaMonitor] request function tidak tersedia")
