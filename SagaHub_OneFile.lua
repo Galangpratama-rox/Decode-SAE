@@ -394,18 +394,6 @@ do
     local ge0 = (getgenv and getgenv()) or _G
     warn("[FyyBypass] Bypass block run — PlaceId: " .. tostring(game and game.PlaceId or "?"))
 
-    -- Simpan TRUE origRequest sebelum apapun di-replace
-    -- Ini HARUS jadi yang pertama di bypass block
-    do
-        local _ge_early = (getgenv and getgenv()) or _G
-        local _true_req = rawget(_ge_early, "request")
-                       or rawget(_ge_early, "http_request")
-                       or rawget(_ge_early, "httprequest")
-        if type(_true_req) == "function" then
-            rawset(_ge_early, "__FyyTrueRequest", _true_req)
-        end
-    end
-
     -- =========================================================
     -- INTERCEPT queue_on_teleport API (Delta/executor built-in)
     -- Runtime FyyCommunity memanggil queue_on_teleport() untuk
@@ -590,71 +578,16 @@ do
                     type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET")
                 if fake then return fake end
             end
-            -- Non-fyycommunity: gunakan __FyyTrueRequest (disimpan sebelum bypass)
-            local _ge_fb = (getgenv and getgenv()) or _G
-            -- Coba dalam urutan: TrueRequest -> OrigRequest -> orig_fn
-            local _true_req = rawget(_ge_fb, "__FyyTrueRequest")
-            local _orig_req = rawget(_ge_fb, "__FyyOrigRequest")
-
-            for _, _try_fn in ipairs({_true_req, _orig_req, orig_fn}) do
-                if type(_try_fn) == "function" then
-                    -- Skip kalau sama dengan fakeReq (circular)
-                    local _fake = rawget(_ge_fb, "__FyyFakeReq")
-                    if _try_fn ~= _fake then
-                        local ok_r, res_r = pcall(_try_fn, opts)
-                        if ok_r and res_r and type(res_r) == "table" then
-                            local sc = res_r.StatusCode or res_r.Status or 0
-                            if sc > 0 then return res_r end
-                        end
-                    end
-                end
-            end
-
-            -- game:HttpGet untuk GET (last resort)
-            local method = type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET"
-            if method == "GET" then
-                local ok_hg, body_hg = pcall(function()
-                    return game:HttpGet(url, true)
-                end)
-                if ok_hg and body_hg and #body_hg > 0 then
-                    return {StatusCode=200, Status=200, Body=body_hg}
-                end
-            end
-
-            -- games.roblox.com/servers: return valid empty response
-            -- biar tidak error, runtime tampilkan "No servers found"
-            if url:find("games%.roblox%.com") and url:find("server") then
-                return {StatusCode=200, Status=200, Body='{"data":[]}'}
-            end
-
-            return {StatusCode=0,Status=0,Body=""}
+            return orig_fn(opts)
         end
     end
 
     -- Hook global getgenv/_G
     local ge = (getgenv and getgenv()) or _G
-
-    -- Simpan request ASLI sebelum di-replace (untuk forward non-fyycommunity)
-    do
-        local _trueOrig = rawget(ge,"request") or rawget(ge,"http_request")
-                       or rawget(ge,"httprequest")
-        if type(_trueOrig) == "function" then
-            rawset(ge, "__FyyOrigRequest", _trueOrig)
-            warn("[FyyBypass] Saved __FyyOrigRequest: " .. tostring(type(_trueOrig)))
-        end
-    end
-
     for _, k in ipairs({"request","http_request","httprequest"}) do
         local orig = rawget(ge, k)
         if type(orig) == "function" then
             ge[k] = make_hooked(orig)
-        else
-            -- Set fakeReq bahkan kalau key ini nil
-            -- (Delta mungkin pakai http_request, bukan request)
-            rawset(ge, k, make_hooked(
-                rawget(ge,"request") or rawget(ge,"http_request") or
-                rawget(ge,"httprequest") or function() return {StatusCode=0,Body=""} end
-            ))
         end
     end
     -- Hook syn.request
@@ -683,17 +616,12 @@ do
         end)
     end
 
-        -- Simpan origRequest SEBELUM di-replace, untuk dipakai fakeReq
-    -- saat forward non-fyycommunity request (mis: games.roblox.com)
+        -- Set __FyyFakeReq agar Tu669bhFa[(0x5DB)] langsung pakai ini
     do
         local _ge2 = (getgenv and getgenv()) or _G
-        local _origReq = rawget(_ge2,"request") or rawget(_ge2,"http_request")
-                      or rawget(_ge2,"httprequest")
-        if type(_origReq) == "function" then
-            rawset(_ge2, "__FyyOrigRequest", _origReq)
-        end
         rawset(_ge2, "__FyyFakeReq", make_hooked(
-            _origReq or function() return {StatusCode=0,Body=""} end
+            rawget(_ge2,"request") or rawget(_ge2,"http_request") or
+            rawget(_ge2,"httprequest") or function() return {StatusCode=0,Body=""} end
         ))
     end
     print("[FyyBypass] Bypass aktif — keyless mode setiap execute")
@@ -1074,13 +1002,9 @@ do
         fakeReq = function(opts)
             local url = type(opts)=="table" and tostring(opts.Url or opts.url or "") or tostring(opts or "")
             if not url:find("fyycommunity%.com") then
-                -- Forward non-fyycommunity ke request asli executor
                 local orig = rawget(ge,"__FyyOrigRequest")
-                    or rawget(ge,"request") ~= fakeReq and rawget(ge,"request")
-                    or rawget(ge,"http_request")
                 if type(orig)=="function" then return orig(opts) end
-                -- Fallback GET
-                if type(opts)~="table" or not opts.Method or opts.Method=="GET" then
+                if type(opts)=="table" and (not opts.Method or opts.Method=="GET") then
                     local ok2,body = pcall(function() return game:HttpGet(url,true) end)
                     if ok2 and body then return {StatusCode=200,Status=200,Body=body} end
                 end
