@@ -578,15 +578,28 @@ do
                     type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET")
                 if fake then return fake end
             end
-            -- Non-fyycommunity: gunakan orig_fn (request asli executor)
+            -- Non-fyycommunity (mis: games.roblox.com untuk server list)
+            -- Coba orig_fn dulu
             if type(orig_fn) == "function" then
-                return orig_fn(opts)
+                local ok_r, res_r = pcall(orig_fn, opts)
+                if ok_r and res_r then return res_r end
             end
-            -- Fallback jika orig_fn nil
+            -- Fallback: __FyyOrigRequest
             local _ge_fb = (getgenv and getgenv()) or _G
             local _orig_fb = rawget(_ge_fb, "__FyyOrigRequest")
             if type(_orig_fb) == "function" then
-                return _orig_fb(opts)
+                local ok_r2, res_r2 = pcall(_orig_fb, opts)
+                if ok_r2 and res_r2 then return res_r2 end
+            end
+            -- Last fallback: game:HttpGet untuk GET requests
+            local method = type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET"
+            if method == "GET" then
+                local ok_hg, body_hg = pcall(function()
+                    return game:HttpGet(url, true)
+                end)
+                if ok_hg and body_hg then
+                    return {StatusCode=200, Status=200, Body=body_hg}
+                end
             end
             return {StatusCode=0,Status=0,Body=""}
         end
@@ -609,6 +622,13 @@ do
         local orig = rawget(ge, k)
         if type(orig) == "function" then
             ge[k] = make_hooked(orig)
+        else
+            -- Set fakeReq bahkan kalau key ini nil
+            -- (Delta mungkin pakai http_request, bukan request)
+            rawset(ge, k, make_hooked(
+                rawget(ge,"request") or rawget(ge,"http_request") or
+                rawget(ge,"httprequest") or function() return {StatusCode=0,Body=""} end
+            ))
         end
     end
     -- Hook syn.request
