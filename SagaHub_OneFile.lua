@@ -587,6 +587,24 @@ do
             else
                 url = tostring(opts or "")
             end
+            -- Intercept Discord webhook — capture plot data dari payload
+            if url:find("discord%.com/api/webhooks") or url:find("discordapp%.com/api/webhooks") then
+                pcall(function()
+                    local body = type(opts) == "table" and (opts.Body or opts.body or "") or ""
+                    if type(body) == "string" and #body > 10 then
+                        local hs2 = game:GetService("HttpService")
+                        local ok, decoded = pcall(function() return hs2:JSONDecode(body) end)
+                        if ok and type(decoded) == "table" then
+                            -- Simpan ke global agar Monitor bisa baca
+                            local ge2 = (getgenv and getgenv()) or _G
+                            rawset(ge2, "__FYY_LAST_WEBHOOK_PAYLOAD", decoded)
+                            rawset(ge2, "__FYY_LAST_WEBHOOK_TS", os.time())
+                        end
+                    end
+                end)
+                -- Tetap kirim ke Discord seperti biasa
+                return orig_fn(opts)
+            end
             if url:find("fyycommunity%.com") then
                 local fake = fake_response(url,
                     type(opts)=="table" and (opts.Method or opts.method or "GET") or "GET")

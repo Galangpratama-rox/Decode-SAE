@@ -1,6 +1,6 @@
 --[[
 ================================================================================
-  SAGAHUB MONITOR  v2.2
+  SAGAHUB MONITOR  v2.3
   File  : SagaHub_Monitor.lua
   Repo  : https://github.com/Galangpratama-rox/Decode-SAE
 
@@ -97,14 +97,51 @@ local function safeNum(v)
 end
 
 -- ============================================================
--- EGG / PLOT DATA COLLECTOR  v2.2
--- Path diverifikasi dari debug live:
---   workspace.PlacedEggRenders  → model {userId}_{uid} = egg di plot
---   EggState.FetchEggRecord(uid) → AssetCategory, AssetScale, Mutations
---   RS.Data.Assets.Directory[category] → EarningRate, Rarity, Egg.WeightKg, Egg.DisplayName
---   AssetRoster.ReadSnapshot() → pets (bukan eggs), disimpan di stats.pets
---   PlotState.ResolveLocalSlot() + ResolveFolder() → plot level
+-- EGG / PLOT DATA COLLECTOR  v2.3
+-- Strategy:
+--   1. PRIMARY: baca __FYY_LAST_WEBHOOK_PAYLOAD yang di-intercept
+--      dari Discord webhook runtime — data 100% akurat (nama, rarity,
+--      weightKg, ratePerSecond) sama persis dengan yang dikirim ke Discord
+--   2. FALLBACK: PlacedEggRenders + FetchEggRecord + Assets.Directory
+--      (nama & rarity akurat, weightKg/$/s adalah base value bukan live)
+--   3. PETS: AssetRoster.ReadSnapshot() — strict filter OwnerUserId
 -- ============================================================
+
+-- Parse plot eggs dari webhook payload yang sudah di-intercept di OneFile
+local function parsePlotEggsFromWebhook(payload)
+    if type(payload) ~= "table" then return nil end
+    -- Runtime FyyCommunity kirim data plot via content string
+    -- Format: "Plot Eggs · N\n• Name · Rarity · Kg · $/s\n..."
+    -- Atau via embeds/components
+    local content = tostring(payload.content or "")
+    if #content < 5 then return nil end
+
+    local eggs = {}
+    -- Pattern: "• {name} · {rarity} · {weight} Kg · ${rate}/s"
+    for line in content:gmatch("[^\n]+") do
+        local name, rarity, weight, rate = line:match(
+            "^[•·%*%-]%s*(.-)%s*[·%·]%s*(.-)%s*[·%·]%s*([%d%.]+)%s*Kg%s*[·%·]%s*%$([%d%.]+[KMBT]?)/s"
+        )
+        if name and rarity and weight and rate then
+            -- Convert rate string ke number (1.07B → 1070000000)
+            local rateNum = tonumber(rate) or 0
+            local suffix = rate:match("[KMBT]$")
+            if suffix == "K" then rateNum = rateNum * 1e3
+            elseif suffix == "M" then rateNum = rateNum * 1e6
+            elseif suffix == "B" then rateNum = rateNum * 1e9
+            elseif suffix == "T" then rateNum = rateNum * 1e12
+            end
+            table.insert(eggs, {
+                name         = name:gsub("^%s+",""):gsub("%s+$",""),
+                rarity       = rarity:gsub("^%s+",""):gsub("%s+$",""),
+                weightKg     = tonumber(weight) or 0,
+                ratePerSecond= rateNum,
+                mutations    = {},
+            })
+        end
+    end
+    return #eggs > 0 and eggs or nil
+end
 
 local function getEggAndPlotData(stats)
     local rs2 = game:GetService("ReplicatedStorage")
@@ -113,10 +150,30 @@ local function getEggAndPlotData(stats)
     local ok2, AssetRoster = pcall(require, rs2.Client.AssetRoster)
     local ok3, PlotState   = pcall(require, rs2.Client.PlotState)
     local ok4, Assets      = pcall(require, rs2.Data.Assets)
+
+    -- ── PRIMARY: baca dari webhook payload yang di-intercept ──────
+    pcall(function()
+        local ge2 = (getgenv and getgenv()) or _G
+        local payload = rawget(ge2, "__FYY_LAST_WEBHOOK_PAYLOAD")
+        local ts      = rawget(ge2, "__FYY_LAST_WEBHOOK_TS") or 0
+        -- Hanya pakai kalau fresh (dalam 5 menit)
+        if not payload or (os.time() - ts) > 300 then return end
+
+        local eggs = parsePlotEggsFromWebhook(payload)
+        if eggs and #eggs > 0 then
+            stats.plotEggs     = eggs
+            stats.plotEggCount = #eggs
+            warn("[SagaMonitor] ✅ plotEggs dari webhook intercept: " .. #eggs)
+        end
+    end)
     if not ok1 then return end
 
-    -- ── Plot Eggs dari PlacedEggRenders + FetchEggRecord + Assets.Directory ──
+    -- ── FALLBACK: PlacedEggRenders + FetchEggRecord + Assets.Directory ──
+    -- Hanya jalan kalau webhook intercept belum ada data
     pcall(function()
+        if stats.plotEggs and #stats.plotEggs > 0 then return end
+        if not ok1 then return end
+
         local myId   = tostring(lp.UserId)
         local myPrefix = myId .. "_"   -- exact prefix: "11624556573_"
         local ws     = game:GetService("Workspace")
