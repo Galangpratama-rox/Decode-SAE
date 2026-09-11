@@ -118,6 +118,7 @@ local function getEggAndPlotData(stats)
     -- ── Plot Eggs dari PlacedEggRenders + FetchEggRecord + Assets.Directory ──
     pcall(function()
         local myId   = tostring(lp.UserId)
+        local myPrefix = myId .. "_"   -- exact prefix: "11624556573_"
         local ws     = game:GetService("Workspace")
         local renders = ws:FindFirstChild("PlacedEggRenders")
         if not renders then return end
@@ -128,8 +129,9 @@ local function getEggAndPlotData(stats)
 
         local plotEggs = {}
         for _, model in ipairs(renders:GetChildren()) do
-            if model.Name:sub(1, #myId) == myId then
-                local uid = model.Name:sub(#myId + 2)
+            -- Exact match: nama harus mulai dengan "{userId}_"
+            if model.Name:sub(1, #myPrefix) == myPrefix then
+                local uid = model.Name:sub(#myPrefix + 1)
                 local okR, rec = pcall(function()
                     return EggState.FetchEggRecord(uid)
                 end)
@@ -201,6 +203,7 @@ local function getEggAndPlotData(stats)
 
     -- ── Pets dari AssetRoster.ReadSnapshot ────────────────────────
     -- (ini adalah pets yang di-equip/di-pen, bukan eggs)
+    -- ReadSnapshot() return semua player di server — HARUS filter ketat
     pcall(function()
         if not ok2 then return end
         local snap = AssetRoster.ReadSnapshot()
@@ -208,8 +211,12 @@ local function getEggAndPlotData(stats)
 
         local mySnap = nil
         for _, s in ipairs(snap) do
-            if type(s) == "table" and s.OwnerUserId == lp.UserId then
-                mySnap = s; break
+            -- Strict: OwnerUserId harus exact match number, bukan string prefix
+            if type(s) == "table"
+                and type(s.OwnerUserId) == "number"
+                and s.OwnerUserId == lp.UserId then
+                mySnap = s
+                break
             end
         end
         if not mySnap then return end
@@ -220,24 +227,29 @@ local function getEggAndPlotData(stats)
         local pets = {}
         for uid, rec in pairs(records) do
             if type(rec) == "table" then
-                local item = rec.ItemData or {}
-                local muts = {}
-                if type(item.Mutations) == "table" then
-                    for _, m in ipairs(item.Mutations) do
-                        table.insert(muts, tostring(m))
+                -- Double-check: setiap record harus milik player ini
+                if rec.OwnerUserId and rec.OwnerUserId ~= lp.UserId then
+                    -- skip record milik orang lain
+                else
+                    local item = rec.ItemData or {}
+                    local muts = {}
+                    if type(item.Mutations) == "table" then
+                        for _, m in ipairs(item.Mutations) do
+                            table.insert(muts, tostring(m))
+                        end
                     end
+                    table.insert(pets, {
+                        uid            = tostring(uid),
+                        name           = tostring(item.Category or "Unknown"),
+                        moneyPerSecond = safeNum(rec.MoneyPerSecond),
+                        ratePerSecond  = safeNum(rec.MoneyPerSecond),
+                        scale          = safeNum(item.Scale or 1),
+                        baseMutation   = tostring(item.BaseMutation or ""),
+                        mutations      = muts,
+                        gender         = tostring(item.Gender or ""),
+                        personality    = tostring(item.Personality or ""),
+                    })
                 end
-                table.insert(pets, {
-                    uid            = tostring(uid),
-                    name           = tostring(item.Category or "Unknown"),
-                    moneyPerSecond = safeNum(rec.MoneyPerSecond),
-                    ratePerSecond  = safeNum(rec.MoneyPerSecond),
-                    scale          = safeNum(item.Scale or 1),
-                    baseMutation   = tostring(item.BaseMutation or ""),
-                    mutations      = muts,
-                    gender         = tostring(item.Gender or ""),
-                    personality    = tostring(item.Personality or ""),
-                })
             end
         end
         table.sort(pets, function(a, b) return a.ratePerSecond > b.ratePerSecond end)
