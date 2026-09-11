@@ -1086,7 +1086,7 @@ if _ok then
     task.delay(6, function()
         pcall(function()
             local _mon_src = game:HttpGet(
-                "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Monitor.lua",
+                "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Monitor.lua?v="..tostring(os.time()),
                 true
             )
             if _mon_src and #_mon_src > 100 then
