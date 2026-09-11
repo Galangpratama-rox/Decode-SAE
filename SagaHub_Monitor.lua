@@ -168,7 +168,9 @@ local function getEggAndPlotData(stats)
                 table.insert(placedEggs, {
                     uid            = tostring(uid),
                     name           = tostring(item.Category or rec.Category or "Unknown"),
-                    moneyPerSecond = safeNum(rec.MoneyPerSecond),
+                    ratePerSecond  = safeNum(rec.MoneyPerSecond),  -- field utama untuk frontend
+                    moneyPerSecond = safeNum(rec.MoneyPerSecond),  -- alias
+                    weightKg       = safeNum(item.Scale or 0),     -- Scale dipakai sebagai proxy berat
                     scale          = safeNum(item.Scale or 1),
                     baseMutation   = tostring(item.BaseMutation or ""),
                     mutations      = muts,
@@ -187,6 +189,26 @@ local function getEggAndPlotData(stats)
             stats.placedEggs     = placedEggs
             stats.placedEggCount = #placedEggs
             warn("[SagaMonitor] ✅ placedEggs collected: " .. #placedEggs)
+
+            -- Enrich dengan weightKg dari FetchEggRecord (async, best-effort)
+            task.spawn(function()
+                for _, egg in ipairs(placedEggs) do
+                    pcall(function()
+                        local rec2 = EggState.FetchEggRecord(egg.uid)
+                        if type(rec2) == "table" then
+                            -- WeightKg dari Placement atau AssetScale
+                            if rec2.Placement and type(rec2.Placement) == "table" then
+                                -- tidak ada weightKg di Placement
+                            end
+                            -- Scale sebagai proxy weightKg (game pakai scale = ukuran relatif)
+                            egg.weightKg = safeNum(rec2.AssetScale or egg.scale or 0)
+                            egg.hasParasite = rec2.HasParasite == true
+                        end
+                    end)
+                end
+                -- Update stats setelah enrich
+                stats.placedEggs = placedEggs
+            end)
         else
             warn("[SagaMonitor] ⚠️ placedEggs: 0 records found")
         end
