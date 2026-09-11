@@ -115,39 +115,65 @@ local function getEggAndPlotData(stats)
 
     -- ── Placed eggs dari AssetRoster.ReadSnapshot ─────────────────
     pcall(function()
-        local snap = AssetRoster.ReadSnapshot(lp.UserId)
+        -- ReadSnapshot bisa return semua player di server
+        -- Tidak perlu argument, atau argument diabaikan
+        local snap = AssetRoster.ReadSnapshot()
+        if type(snap) ~= "table" then
+            snap = AssetRoster.ReadSnapshot(lp.UserId)
+        end
         if type(snap) ~= "table" then return end
 
-        -- Cari snapshot milik player ini
+        -- Cari snapshot milik player ini — bisa ipairs atau pairs
         local mySnap = nil
+        -- Coba ipairs dulu (array)
         for _, s in ipairs(snap) do
             if type(s) == "table" and s.OwnerUserId == lp.UserId then
                 mySnap = s
                 break
             end
         end
-        if not mySnap or type(mySnap.Records) ~= "table" then return end
+        -- Fallback pairs (dict)
+        if not mySnap then
+            for _, s in pairs(snap) do
+                if type(s) == "table" and s.OwnerUserId == lp.UserId then
+                    mySnap = s
+                    break
+                end
+            end
+        end
+        if not mySnap then return end
+
+        -- Records bisa langsung di snap atau di mySnap.Records
+        local records = mySnap.Records
+        if type(records) ~= "table" then
+            -- Mungkin mySnap sendiri adalah Records
+            records = mySnap
+        end
+        if type(records) ~= "table" then return end
 
         local placedEggs = {}
-        for uid, rec in pairs(mySnap.Records) do
+        for uid, rec in pairs(records) do
             if type(rec) == "table" then
                 local item = rec.ItemData or {}
-                -- Mutations: bisa table array
                 local muts = {}
                 if type(item.Mutations) == "table" then
                     for _, m in ipairs(item.Mutations) do
                         table.insert(muts, tostring(m))
                     end
+                elseif type(item.Mutations) == "table" then
+                    for _, m in pairs(item.Mutations) do
+                        table.insert(muts, tostring(m))
+                    end
                 end
                 table.insert(placedEggs, {
-                    uid           = tostring(uid),
-                    name          = tostring(item.Category or "Unknown"),
-                    moneyPerSecond= safeNum(rec.MoneyPerSecond),
-                    scale         = safeNum(item.Scale or 1),
-                    baseMutation  = tostring(item.BaseMutation or ""),
-                    mutations     = muts,
-                    gender        = tostring(item.Gender or ""),
-                    personality   = tostring(item.Personality or ""),
+                    uid            = tostring(uid),
+                    name           = tostring(item.Category or rec.Category or "Unknown"),
+                    moneyPerSecond = safeNum(rec.MoneyPerSecond),
+                    scale          = safeNum(item.Scale or 1),
+                    baseMutation   = tostring(item.BaseMutation or ""),
+                    mutations      = muts,
+                    gender         = tostring(item.Gender or ""),
+                    personality    = tostring(item.Personality or ""),
                 })
             end
         end
@@ -158,8 +184,11 @@ local function getEggAndPlotData(stats)
         end)
 
         if #placedEggs > 0 then
-            stats.placedEggs = placedEggs
+            stats.placedEggs     = placedEggs
             stats.placedEggCount = #placedEggs
+            warn("[SagaMonitor] ✅ placedEggs collected: " .. #placedEggs)
+        else
+            warn("[SagaMonitor] ⚠️ placedEggs: 0 records found")
         end
     end)
 
