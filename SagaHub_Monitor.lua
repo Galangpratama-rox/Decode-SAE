@@ -1,129 +1,344 @@
 --[[
 ================================================================================
-  SAGAHUB MONITOR
+  SAGAHUB MONITOR  v2.1
   File  : SagaHub_Monitor.lua
   Repo  : https://github.com/Galangpratama-rox/Decode-SAE
 
   CARA PAKAI:
-    Jalankan setelah SagaHub_OneFile sudah load (tunggu ~5 detik):
-
-    task.wait(5)
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Monitor.lua"))()
-
-    Atau tambahkan di auto-execute setelah SagaHub:
     loadstring(game:HttpGet("...SagaHub_OneFile.lua"))()
     task.wait(6)
     loadstring(game:HttpGet("...SagaHub_Monitor.lua"))()
 
   CONFIG:
-    Ganti MONITOR_ENDPOINT dengan URL website kamu.
-    Format POST JSON, cocok untuk Express/FastAPI/Flask endpoint.
+    Ganti MONITOR_ENDPOINT & MONITOR_KEY agar cocok dengan .env backend.
+
+  DATA YANG DIKIRIM:
+    - Basic: username, userId, placeId, ping, position, leaderstats
+    - Plot snapshot: income, speed, capacity, plotLevel, treadmillLevel
+    - placedEggs: array egg yang ditanam (name, rarity, ratePerSecond, weightKg, mutations)
+    - activePets: jumlah pet aktif
+    - backpackEggCount / backpackPetCount
+    - latestDeposit: egg terakhir yang di-deposit
 ================================================================================
 --]]
 
 -- ============================================================
--- CONFIG — ganti ini dengan URL website kamu
+-- CONFIG
 -- ============================================================
 local MONITOR_ENDPOINT = "https://backend-monitoring-sae-production-a7b9.up.railway.app/api/monitor"
-local MONITOR_INTERVAL = 30  -- kirim data setiap N detik
-local MONITOR_KEY      = "sagahub-secret-key"  -- harus sama dengan MONITOR_KEY di .env
+local MONITOR_INTERVAL = 30   -- kirim setiap N detik
+local MONITOR_KEY      = "sagahub-secret-key"
 
 -- ============================================================
 -- SETUP
 -- ============================================================
-local ge       = getgenv and getgenv() or _G
-local Players  = game:GetService("Players")
-local lp       = Players.LocalPlayer
-local hs       = game:GetService("HttpService")
-local rs       = game:GetService("RunService")
+local ge      = (getgenv and getgenv()) or _G
+local Players = game:GetService("Players")
+local lp      = Players.LocalPlayer
+local hs      = game:GetService("HttpService")
 
 if not lp then
     warn("[SagaMonitor] LocalPlayer tidak ada, abort")
     return
 end
 
--- Cek apakah SagaHub sudah load
 local handoff = rawget(ge, "__FYY_ACCESS_HANDOFF")
-    or _G["__FYY_ACCESS_HANDOFF"]
     or (type(shared) == "table" and shared["__FYY_ACCESS_HANDOFF"])
 
--- Ambil request function — pakai HttpService:RequestAsync langsung
--- Ini TIDAK bisa di-intercept oleh fakeReq karena bukan dari getgenv()
+-- ============================================================
+-- REQUEST HELPER
+-- ============================================================
 local function doRequest(url, method, headers, body)
     local hs2 = game:GetService("HttpService")
-    -- Coba HttpService:RequestAsync (tidak semua executor support)
     local ok1, res1 = pcall(function()
         return hs2:RequestAsync({
-            Url     = url,
-            Method  = method or "POST",
-            Headers = headers or {},
-            Body    = body or "",
+            Url = url, Method = method or "POST",
+            Headers = headers or {}, Body = body or "",
         })
     end)
-    if ok1 and res1 and (res1.StatusCode or 0) > 0 then
-        return res1
-    end
+    if ok1 and res1 and (res1.StatusCode or 0) > 0 then return res1 end
 
-    -- Fallback: cari request function yang bukan fakeReq
-    local ge2 = (getgenv and getgenv()) or _G
+    local ge2    = (getgenv and getgenv()) or _G
     local fakeRef = rawget(ge2, "__FyyFakeReq")
     local reqFns = {
         rawget(ge2, "__FyyTrueRequest"),
         rawget(ge2, "__FyyOrigRequest"),
     }
-    -- Cek semua nama request
-    for _, name in ipairs({"request","http_request","httprequest","syn"}) do
+    for _, name in ipairs({"request","http_request","httprequest"}) do
         local fn = rawget(ge2, name)
         if type(fn) == "function" and fn ~= fakeRef then
             table.insert(reqFns, fn)
-        elseif type(fn) == "table" and type(rawget(fn, "request")) == "function" then
-            table.insert(reqFns, rawget(fn, "request"))
+        elseif type(fn) == "table" and type(rawget(fn,"request")) == "function" then
+            table.insert(reqFns, rawget(fn,"request"))
         end
     end
-
     for _, fn in ipairs(reqFns) do
         if type(fn) == "function" and fn ~= fakeRef then
             local ok2, res2 = pcall(fn, {
-                Url     = url,
-                Method  = method or "POST",
-                Headers = headers or {},
-                Body    = body or "",
+                Url = url, Method = method or "POST",
+                Headers = headers or {}, Body = body or "",
             })
             if ok2 and res2 and type(res2) == "table" and (res2.StatusCode or 0) > 0 then
                 return res2
             end
         end
     end
-
     return nil
 end
 
-warn("[SagaMonitor] Request method siap")
+warn("[SagaMonitor] Request helper siap")
 
 -- ============================================================
--- DATA COLLECTOR — kumpulkan semua info dari game
+-- HELPER: safe number
+-- ============================================================
+local function safeNum(v)
+    local n = tonumber(v)
+    return n or 0
+end
+
+-- ============================================================
+-- EGG / PLOT DATA COLLECTOR
+-- Membaca data plot & egg langsung dari Roblox Instance tree
+-- sesuai dengan arsitektur SAE (Steal An Egg, PlaceId 10563114921)
+-- ============================================================
+
+-- Coba baca plot snapshot dari WebhookRuntime (kalau ada)
+local function getPlotSnapshotFromRuntime()
+    -- Runtime FyyCommunity expose collectDashboardSnapshot via handoff
+    if not handoff then return nil end
+    local snapshot = nil
+    pcall(function()
+        local rt = rawget(ge, "__FYY_WEBHOOK_RUNTIME")
+            or (handoff and handoff.webhookRuntime)
+            or (handoff and handoff.runtime)
+        if rt and type(rt.collectDashboardSnapshot) == "function" then
+            snapshot = rt:collectDashboardSnapshot()
+        elseif rt and type(rt.getStats) == "function" then
+            snapshot = rt:getStats()
+        end
+    end)
+    return snapshot
+end
+
+-- Coba baca placed eggs dari SAE EggState/EggInventory remote
+local function getPlacedEggsFromRemote()
+    local eggs = {}
+    pcall(function()
+        local rs2 = game:GetService("ReplicatedStorage")
+
+        -- SAE menyimpan egg inventory via RemoteFunction "EggInventory"
+        -- dengan method "Get" atau via folder Remotes
+        local remotes = rs2:FindFirstChild("Remotes")
+            or rs2:FindFirstChild("Remote")
+            or rs2:FindFirstChild("Events")
+
+        local eggInvRemote = nil
+        if remotes then
+            eggInvRemote = remotes:FindFirstChild("EggInventory")
+                or remotes:FindFirstChild("GetEggInventory")
+                or remotes:FindFirstChild("ReadEggInventory")
+        end
+
+        if eggInvRemote and eggInvRemote:IsA("RemoteFunction") then
+            local ok, result = pcall(function()
+                return eggInvRemote:InvokeServer("Get")
+            end)
+            if ok and type(result) == "table" then
+                for _, egg in ipairs(result) do
+                    if type(egg) == "table" then
+                        table.insert(eggs, {
+                            name          = tostring(egg.name or egg.item or egg.uid or "Unknown"),
+                            category      = tostring(egg.category or egg.AssetCategory or ""),
+                            rarity        = tostring(egg.rarity or "Unknown"),
+                            rarityRank    = safeNum(egg.rarityRank),
+                            ratePerSecond = safeNum(egg.ratePerSecond),
+                            weightKg      = safeNum(egg.weightKg),
+                            scale         = safeNum(egg.scale or egg.AssetScale),
+                            mutations     = egg.mutations or {},
+                            baseMutation  = tostring(egg.baseMutation or egg.BaseMutation or ""),
+                            placed        = egg.placed == true,
+                            areaId        = tostring(egg.areaId or egg.AreaId or ""),
+                        })
+                    end
+                end
+            end
+        end
+    end)
+    return eggs
+end
+
+-- Baca plot state dari workspace Bases/PlotState
+local function getPlotStateFromWorkspace()
+    local plotData = {}
+    pcall(function()
+        -- SAE workspace structure: workspace.Areas atau workspace.Bases
+        local ws = game:GetService("Workspace")
+
+        -- Cari Bases folder (tempat plot berada)
+        local bases = ws:FindFirstChild("Bases")
+            or ws:FindFirstChild("Plots")
+            or ws:FindFirstChild("PlayerPlots")
+
+        if not bases then return end
+
+        -- Cari plot yang dimiliki player ini
+        local myPlot = nil
+        for _, plot in ipairs(bases:GetChildren()) do
+            -- Plot ownership biasanya via StringValue "Owner" atau attribute
+            local ownerVal = plot:FindFirstChild("Owner")
+                or plot:FindFirstChild("OwnerUserId")
+                or plot:FindFirstChild("PlayerId")
+            if ownerVal then
+                local ownerId = tonumber(ownerVal.Value)
+                if ownerId == lp.UserId then
+                    myPlot = plot
+                    break
+                end
+            end
+            -- Fallback: cek nama plot == nama player
+            if plot.Name == lp.Name then
+                myPlot = plot
+                break
+            end
+        end
+
+        if not myPlot then return end
+
+        -- Baca PlotState (NumberValue / IntValue children)
+        local plotState = myPlot:FindFirstChild("PlotState")
+            or myPlot:FindFirstChild("Stats")
+            or myPlot
+
+        if plotState then
+            local fieldMap = {
+                plotLevel        = {"plotLevel", "PlotLevel", "Level"},
+                plotMaxLevel     = {"plotMaxLevel", "PlotMaxLevel", "MaxLevel"},
+                treadmillLevel   = {"treadmillLevel", "TreadmillLevel"},
+                treadmillMaxLevel= {"treadmillMaxLevel", "TreadmillMaxLevel"},
+                income           = {"income", "Income", "IncomePerSecond", "LiveRatePerSecond"},
+                speed            = {"speed", "Speed", "WalkSpeed"},
+                capacity         = {"capacity", "Capacity", "EggCapacity"},
+                placedEggCount   = {"placedEggs", "PlacedEggs", "EggsPlaced", "placedEggCount"},
+                activePetCount   = {"activePets", "ActivePets", "PetsActive", "activePetCount"},
+                backpackEggCount = {"backpackEggCount", "BackpackEggs", "StorageEggs"},
+                backpackPetCount = {"backpackPetCount", "BackpackPets"},
+            }
+            for key, names in pairs(fieldMap) do
+                for _, n in ipairs(names) do
+                    local child = plotState:FindFirstChild(n)
+                    if child and (child:IsA("NumberValue") or child:IsA("IntValue")) then
+                        plotData[key] = child.Value
+                        break
+                    end
+                end
+            end
+        end
+
+        -- Baca placed eggs di dalam plot (folder Eggs atau EggSlots)
+        local eggsFolder = myPlot:FindFirstChild("Eggs")
+            or myPlot:FindFirstChild("EggSlots")
+            or myPlot:FindFirstChild("PlacedEggs")
+
+        if eggsFolder then
+            plotData.placedEggList = {}
+            for _, eggObj in ipairs(eggsFolder:GetChildren()) do
+                local eggEntry = {
+                    name         = eggObj.Name,
+                    rarity       = "Unknown",
+                    ratePerSecond = 0,
+                    weightKg     = 0,
+                    mutations    = {},
+                }
+                -- Baca attribute atau child values
+                pcall(function()
+                    local rarityV = eggObj:FindFirstChild("Rarity") or eggObj:FindFirstChild("rarity")
+                    if rarityV then eggEntry.rarity = tostring(rarityV.Value) end
+
+                    local rateV = eggObj:FindFirstChild("LiveRatePerSecond")
+                        or eggObj:FindFirstChild("ratePerSecond")
+                        or eggObj:FindFirstChild("Income")
+                    if rateV then eggEntry.ratePerSecond = safeNum(rateV.Value) end
+
+                    local weightV = eggObj:FindFirstChild("WeightKg")
+                        or eggObj:FindFirstChild("weightKg")
+                    if weightV then eggEntry.weightKg = safeNum(weightV.Value) end
+
+                    local catV = eggObj:FindFirstChild("Category")
+                        or eggObj:FindFirstChild("AssetCategory")
+                    if catV then eggEntry.category = tostring(catV.Value) end
+
+                    local scaleV = eggObj:FindFirstChild("AssetScale")
+                        or eggObj:FindFirstChild("Scale")
+                    if scaleV then eggEntry.scale = safeNum(scaleV.Value) end
+
+                    -- Mutations
+                    local mutFolder = eggObj:FindFirstChild("Mutations")
+                    if mutFolder then
+                        for _, m in ipairs(mutFolder:GetChildren()) do
+                            table.insert(eggEntry.mutations, m.Name)
+                        end
+                    end
+                end)
+                table.insert(plotData.placedEggList, eggEntry)
+            end
+        end
+    end)
+    return plotData
+end
+
+-- Baca dari EggWorld/AreaEggs (field eggs saat ini)
+local function getFieldEggs()
+    local fieldEggs = {}
+    pcall(function()
+        local ws = game:GetService("Workspace")
+        local eggWorld = ws:FindFirstChild("EggWorld")
+            or ws:FindFirstChild("AreaEggs")
+            or ws:FindFirstChild("Field")
+
+        if not eggWorld then return end
+
+        for _, area in ipairs(eggWorld:GetChildren()) do
+            for _, eggObj in ipairs(area:GetChildren()) do
+                local entry = { area = area.Name, name = eggObj.Name }
+                pcall(function()
+                    local rV = eggObj:FindFirstChild("Rarity") or eggObj:FindFirstChild("rarity")
+                    if rV then entry.rarity = tostring(rV.Value) end
+                    local wV = eggObj:FindFirstChild("WeightKg") or eggObj:FindFirstChild("weightKg")
+                    if wV then entry.weightKg = safeNum(wV.Value) end
+                    local iV = eggObj:FindFirstChild("LiveRatePerSecond") or eggObj:FindFirstChild("ratePerSecond")
+                    if iV then entry.ratePerSecond = safeNum(iV.Value) end
+                end)
+                table.insert(fieldEggs, entry)
+            end
+        end
+    end)
+    return fieldEggs
+end
+
+-- ============================================================
+-- MAIN DATA COLLECTOR
 -- ============================================================
 local function getPlayerStats()
     local stats = {}
+
     pcall(function()
-        local char = lp.Character
-        -- Basic player info
+        -- ── Basic info ───────────────────────────────────────────────
         stats.username    = lp.Name
         stats.displayName = lp.DisplayName
         stats.userId      = lp.UserId
         stats.placeId     = game.PlaceId
         stats.jobId       = game.JobId
         stats.serverTime  = os.time()
-
-        -- Ping / latency (kalau tersedia)
-        pcall(function()
-            stats.ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"].Value)
-        end)
-
-        -- Player count di server ini
         stats.playerCount = #Players:GetPlayers()
 
-        -- Leaderboard / stats dari ReplicatedStorage atau leaderstats
+        -- ── Ping ─────────────────────────────────────────────────────
+        pcall(function()
+            stats.ping = math.floor(
+                game:GetService("Stats").Network.ServerStatsItem["Data Ping"].Value
+            )
+        end)
+
+        -- ── Leaderstats ───────────────────────────────────────────────
         pcall(function()
             local ls = lp:FindFirstChild("leaderstats")
             if ls then
@@ -134,55 +349,11 @@ local function getPlayerStats()
             end
         end)
 
-        -- SAE specific: coba ambil dari DataModel atau PlayerData
+        -- ── Character position ────────────────────────────────────────
         pcall(function()
-            local rs_game = game:GetService("ReplicatedStorage")
-            -- Steal An Egg biasanya punya PlayerData di ReplicatedStorage
-            local pdata = rs_game:FindFirstChild("PlayerData")
-                       or rs_game:FindFirstChild("Data")
-                       or rs_game:FindFirstChild("GameData")
-            if pdata then
-                local mydata = pdata:FindFirstChild(tostring(lp.UserId))
-                           or pdata:FindFirstChild(lp.Name)
-                if mydata then
-                    stats.gameData = {}
-                    for _, v in ipairs(mydata:GetDescendants()) do
-                        if v:IsA("NumberValue") or v:IsA("IntValue") or v:IsA("StringValue") or v:IsA("BoolValue") then
-                            stats.gameData[v.Name] = tostring(v.Value)
-                        end
-                    end
-                end
-            end
-        end)
-
-        -- Egg count dari leaderstats (SAE specific)
-        pcall(function()
-            local ls = lp:FindFirstChild("leaderstats")
-            if ls then
-                local eggs = ls:FindFirstChild("Eggs") or ls:FindFirstChild("EggCount") or ls:FindFirstChild("Hatched")
-                local pets  = ls:FindFirstChild("Pets") or ls:FindFirstChild("PetCount")
-                local coins = ls:FindFirstChild("Coins") or ls:FindFirstChild("Gold") or ls:FindFirstChild("Currency")
-                if eggs  then stats.eggs  = tonumber(eggs.Value)  end
-                if pets  then stats.pets  = tonumber(pets.Value)  end
-                if coins then stats.coins = tonumber(coins.Value) end
-            end
-        end)
-
-        -- SagaHub runtime stats (dari __FYY_ACCESS_HANDOFF session)
-        pcall(function()
-            if handoff and type(handoff.session) == "table" then
-                stats.session = {
-                    sessionId  = handoff.session.sessionId,
-                    accessTier = handoff.session.accessTier,
-                }
-            end
-        end)
-
-        -- Character position
-        pcall(function()
-            local char2 = lp.Character
-            if char2 then
-                local hrp = char2:FindFirstChild("HumanoidRootPart")
+            local char = lp.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     stats.position = {
                         x = math.floor(hrp.Position.X),
@@ -192,12 +363,131 @@ local function getPlayerStats()
                 end
             end
         end)
+
+        -- ── Session info (SagaHub handoff) ────────────────────────────
+        pcall(function()
+            if handoff and type(handoff.session) == "table" then
+                stats.session = {
+                    sessionId  = handoff.session.sessionId,
+                    accessTier = handoff.session.accessTier,
+                }
+            end
+        end)
+
+        -- ── ReplicatedStorage PlayerData (generic gameData) ───────────
+        pcall(function()
+            local rs2 = game:GetService("ReplicatedStorage")
+            local pdata = rs2:FindFirstChild("PlayerData")
+                or rs2:FindFirstChild("Data")
+                or rs2:FindFirstChild("GameData")
+            if pdata then
+                local mydata = pdata:FindFirstChild(tostring(lp.UserId))
+                    or pdata:FindFirstChild(lp.Name)
+                if mydata then
+                    stats.gameData = {}
+                    for _, v in ipairs(mydata:GetDescendants()) do
+                        if v:IsA("NumberValue") or v:IsA("IntValue")
+                            or v:IsA("StringValue") or v:IsA("BoolValue") then
+                            stats.gameData[v.Name] = tostring(v.Value)
+                        end
+                    end
+                end
+            end
+        end)
     end)
+
+    -- ── Plot & Egg snapshot ───────────────────────────────────────────
+    -- Coba dari WebhookRuntime dulu (paling lengkap)
+    local rtSnapshot = getPlotSnapshotFromRuntime()
+    if rtSnapshot and type(rtSnapshot) == "table" then
+        stats.plotSnapshot = {
+            income           = safeNum(rtSnapshot.income or rtSnapshot.incomePerSecond),
+            incomeDisplay    = tostring(rtSnapshot.incomeDisplay or ""),
+            speed            = safeNum(rtSnapshot.speed),
+            capacity         = safeNum(rtSnapshot.capacity),
+            plotLevel        = safeNum(rtSnapshot.plotLevel),
+            plotMaxLevel     = safeNum(rtSnapshot.plotMaxLevel),
+            treadmillLevel   = safeNum(rtSnapshot.treadmillLevel),
+            treadmillMaxLevel= safeNum(rtSnapshot.treadmillMaxLevel),
+            placedEggCount   = safeNum(rtSnapshot.placedEggs or rtSnapshot.placedEggCount),
+            activePetCount   = safeNum(rtSnapshot.activePets or rtSnapshot.activePetCount),
+            backpackEggCount = safeNum(rtSnapshot.backpackEggCount),
+            backpackPetCount = safeNum(rtSnapshot.backpackPetCount),
+        }
+        -- latestDeposit dari snapshot
+        if type(rtSnapshot.latestDeposit) == "table" then
+            local d = rtSnapshot.latestDeposit
+            stats.latestDeposit = {
+                name          = tostring(d.name or d.item or ""),
+                rarity        = tostring(d.rarity or ""),
+                ratePerSecond = safeNum(d.ratePerSecond),
+                weightKg      = safeNum(d.weightKg),
+                areaId        = tostring(d.areaId or ""),
+                mutations     = d.mutations or {},
+                depositedAt   = safeNum(d.depositedAt),
+            }
+        end
+        -- placedEggs list dari snapshot
+        if type(rtSnapshot.placedEggs) == "table" then
+            stats.placedEggs = {}
+            for _, egg in ipairs(rtSnapshot.placedEggs) do
+                if type(egg) == "table" then
+                    table.insert(stats.placedEggs, {
+                        name          = tostring(egg.name or egg.item or egg.uid or ""),
+                        category      = tostring(egg.category or ""),
+                        rarity        = tostring(egg.rarity or "Unknown"),
+                        rarityRank    = safeNum(egg.rarityRank),
+                        ratePerSecond = safeNum(egg.ratePerSecond),
+                        weightKg      = safeNum(egg.weightKg),
+                        scale         = safeNum(egg.scale or egg.AssetScale),
+                        mutations     = type(egg.mutations) == "table" and egg.mutations or {},
+                        baseMutation  = tostring(egg.baseMutation or ""),
+                        areaId        = tostring(egg.areaId or ""),
+                        placed        = egg.placed == true,
+                    })
+                end
+            end
+        end
+    else
+        -- Fallback: baca langsung dari workspace
+        local wsPlot = getPlotStateFromWorkspace()
+        if wsPlot and next(wsPlot) then
+            stats.plotSnapshot = {
+                income           = safeNum(wsPlot.income),
+                speed            = safeNum(wsPlot.speed),
+                capacity         = safeNum(wsPlot.capacity),
+                plotLevel        = safeNum(wsPlot.plotLevel),
+                plotMaxLevel     = safeNum(wsPlot.plotMaxLevel),
+                treadmillLevel   = safeNum(wsPlot.treadmillLevel),
+                treadmillMaxLevel= safeNum(wsPlot.treadmillMaxLevel),
+                placedEggCount   = safeNum(wsPlot.placedEggCount),
+                activePetCount   = safeNum(wsPlot.activePetCount),
+                backpackEggCount = safeNum(wsPlot.backpackEggCount),
+                backpackPetCount = safeNum(wsPlot.backpackPetCount),
+            }
+            if type(wsPlot.placedEggList) == "table" then
+                stats.placedEggs = wsPlot.placedEggList
+            end
+        end
+
+        -- Juga coba remote EggInventory
+        local remoteEggs = getPlacedEggsFromRemote()
+        if #remoteEggs > 0 and not stats.placedEggs then
+            stats.placedEggs = remoteEggs
+        end
+    end
+
+    -- ── Field eggs saat ini ───────────────────────────────────────────
+    local fe = getFieldEggs()
+    if #fe > 0 then
+        stats.fieldEggs = fe
+    end
+
     return stats
 end
 
 -- ============================================================
--- SEND — kirim data ke endpoint monitoring
+-- SEND
 -- ============================================================
 local function sendMonitorData()
     local data = getPlayerStats()
@@ -215,8 +505,7 @@ local function sendMonitorData()
 
     local req_ok, resp = pcall(function()
         return doRequest(
-            MONITOR_ENDPOINT,
-            "POST",
+            MONITOR_ENDPOINT, "POST",
             {
                 ["Content-Type"]  = "application/json",
                 ["X-Monitor-Key"] = MONITOR_KEY,
@@ -240,12 +529,10 @@ local function sendMonitorData()
 end
 
 -- ============================================================
--- MAIN LOOP — kirim data setiap MONITOR_INTERVAL detik
+-- MAIN LOOP
 -- ============================================================
-
--- Kirim langsung saat pertama jalan
 task.spawn(function()
-    task.wait(2)  -- tunggu sebentar setelah load
+    task.wait(2)
 
     local success = sendMonitorData()
     if success then
@@ -254,19 +541,15 @@ task.spawn(function()
         warn("[SagaMonitor] ❌ Gagal kirim data pertama")
     end
 
-    -- Loop interval
     while true do
         task.wait(MONITOR_INTERVAL)
-
-        -- Stop kalau player sudah tidak di game
         if not lp or not lp.Parent then
             warn("[SagaMonitor] Player left, monitor stop")
             break
         end
-
         pcall(sendMonitorData)
     end
 end)
 
-warn("[SagaMonitor] Monitor aktif — interval: " .. MONITOR_INTERVAL .. "s")
+warn("[SagaMonitor] Monitor v2.1 aktif — interval: " .. MONITOR_INTERVAL .. "s")
 warn("[SagaMonitor] Endpoint: " .. MONITOR_ENDPOINT)
