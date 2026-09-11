@@ -1,6 +1,6 @@
 --[[
 ================================================================================
-  SAGAHUB MONITOR  v2.1
+  SAGAHUB MONITOR  v2.2
   File  : SagaHub_Monitor.lua
   Repo  : https://github.com/Galangpratama-rox/Decode-SAE
 
@@ -97,61 +97,127 @@ local function safeNum(v)
 end
 
 -- ============================================================
--- EGG / PLOT DATA COLLECTOR
--- Path sudah diverifikasi dari debug output:
--- - AssetRoster.ReadSnapshot(userId) → Records per egg
--- - EggState.FetchEggRecord(uid) → detail per egg
--- - PlotState.ResolveLocalSlot() + ResolveFolder() → plot data
+-- EGG / PLOT DATA COLLECTOR  v2.2
+-- Path diverifikasi dari debug live:
+--   workspace.PlacedEggRenders  → model {userId}_{uid} = egg di plot
+--   EggState.FetchEggRecord(uid) → AssetCategory, AssetScale, Mutations
+--   RS.Data.Assets.Directory[category] → EarningRate, Rarity, Egg.WeightKg, Egg.DisplayName
+--   AssetRoster.ReadSnapshot() → pets (bukan eggs), disimpan di stats.pets
+--   PlotState.ResolveLocalSlot() + ResolveFolder() → plot level
 -- ============================================================
 
 local function getEggAndPlotData(stats)
     local rs2 = game:GetService("ReplicatedStorage")
 
-    -- Require modules — semua dibungkus pcall agar tidak crash
     local ok1, EggState    = pcall(require, rs2.Client.EggState)
     local ok2, AssetRoster = pcall(require, rs2.Client.AssetRoster)
     local ok3, PlotState   = pcall(require, rs2.Client.PlotState)
-    if not ok1 or not ok2 or not ok3 then return end
+    local ok4, Assets      = pcall(require, rs2.Data.Assets)
+    if not ok1 then return end
 
-    -- ── Placed eggs dari AssetRoster.ReadSnapshot ─────────────────
+    -- ── Plot Eggs dari PlacedEggRenders + FetchEggRecord + Assets.Directory ──
     pcall(function()
-        -- ReadSnapshot bisa return semua player di server
-        -- Tidak perlu argument, atau argument diabaikan
-        local snap = AssetRoster.ReadSnapshot()
-        if type(snap) ~= "table" then
-            snap = AssetRoster.ReadSnapshot(lp.UserId)
-        end
-        if type(snap) ~= "table" then return end
+        local myId   = tostring(lp.UserId)
+        local ws     = game:GetService("Workspace")
+        local renders = ws:FindFirstChild("PlacedEggRenders")
+        if not renders then return end
 
-        -- Cari snapshot milik player ini — bisa ipairs atau pairs
-        local mySnap = nil
-        -- Coba ipairs dulu (array)
-        for _, s in ipairs(snap) do
-            if type(s) == "table" and s.OwnerUserId == lp.UserId then
-                mySnap = s
-                break
+        -- Cache Assets.Directory agar tidak require ulang tiap egg
+        local dir = (ok4 and type(Assets) == "table" and type(Assets.Directory) == "table")
+            and Assets.Directory or nil
+
+        local plotEggs = {}
+        for _, model in ipairs(renders:GetChildren()) do
+            if model.Name:sub(1, #myId) == myId then
+                local uid = model.Name:sub(#myId + 2)
+                local okR, rec = pcall(function()
+                    return EggState.FetchEggRecord(uid)
+                end)
+                if okR and type(rec) == "table" then
+                    local category = tostring(rec.AssetCategory or "Unknown")
+
+                    -- Lookup di Assets.Directory untuk nama, rarity, weightKg, earningRate
+                    local dirEntry  = dir and dir[category]
+                    local eggData   = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
+                    local rarityData= (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
+
+                    local displayName   = tostring(eggData.DisplayName or category .. " Egg")
+                    local weightKg      = safeNum(eggData.WeightKg or 0)
+                    local earningRate   = safeNum(dirEntry and dirEntry.EarningRate or 0)
+                    local rarity        = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
+                    local rarityNumber  = safeNum(rarityData.RarityNumber or 0)
+
+                    -- Mutations
+                    local muts = {}
+                    if type(rec.Mutations) == "table" then
+                        for _, m in ipairs(rec.Mutations) do
+                            table.insert(muts, tostring(m))
+                        end
+                    end
+
+                    -- Scale dari FetchEggRecord (ukuran visual, bukan berat)
+                    local scale = safeNum(rec.AssetScale or 1)
+
+                    -- Berat real = WeightKg * Scale (sama seperti yang ditampilkan webhook)
+                    local actualWeightKg = weightKg * scale
+
+                    -- PlacedAt dari Placement
+                    local placedAt = 0
+                    if type(rec.Placement) == "table" then
+                        placedAt = safeNum(rec.Placement.PlacedAt)
+                    end
+
+                    table.insert(plotEggs, {
+                        uid           = uid,
+                        name          = displayName,
+                        category      = category,
+                        rarity        = rarity,
+                        rarityNumber  = rarityNumber,
+                        ratePerSecond = earningRate,
+                        weightKg      = math.floor(actualWeightKg * 100) / 100,
+                        scale         = scale,
+                        mutations     = muts,
+                        baseMutation  = tostring(rec.BaseMutation or ""),
+                        hasParasite   = rec.HasParasite == true,
+                        placedAt      = placedAt,
+                    })
+                end
             end
         end
-        -- Fallback pairs (dict)
-        if not mySnap then
-            for _, s in pairs(snap) do
-                if type(s) == "table" and s.OwnerUserId == lp.UserId then
-                    mySnap = s
-                    break
-                end
+
+        -- Sort by ratePerSecond descending
+        table.sort(plotEggs, function(a, b)
+            return a.ratePerSecond > b.ratePerSecond
+        end)
+
+        if #plotEggs > 0 then
+            stats.plotEggs      = plotEggs
+            stats.plotEggCount  = #plotEggs
+            warn("[SagaMonitor] ✅ plotEggs collected: " .. #plotEggs)
+        else
+            warn("[SagaMonitor] ⚠️ plotEggs: 0 eggs found in PlacedEggRenders")
+        end
+    end)
+
+    -- ── Pets dari AssetRoster.ReadSnapshot ────────────────────────
+    -- (ini adalah pets yang di-equip/di-pen, bukan eggs)
+    pcall(function()
+        if not ok2 then return end
+        local snap = AssetRoster.ReadSnapshot()
+        if type(snap) ~= "table" then return end
+
+        local mySnap = nil
+        for _, s in ipairs(snap) do
+            if type(s) == "table" and s.OwnerUserId == lp.UserId then
+                mySnap = s; break
             end
         end
         if not mySnap then return end
 
-        -- Records bisa langsung di snap atau di mySnap.Records
         local records = mySnap.Records
-        if type(records) ~= "table" then
-            -- Mungkin mySnap sendiri adalah Records
-            records = mySnap
-        end
         if type(records) ~= "table" then return end
 
-        local placedEggs = {}
+        local pets = {}
         for uid, rec in pairs(records) do
             if type(rec) == "table" then
                 local item = rec.ItemData or {}
@@ -160,17 +226,12 @@ local function getEggAndPlotData(stats)
                     for _, m in ipairs(item.Mutations) do
                         table.insert(muts, tostring(m))
                     end
-                elseif type(item.Mutations) == "table" then
-                    for _, m in pairs(item.Mutations) do
-                        table.insert(muts, tostring(m))
-                    end
                 end
-                table.insert(placedEggs, {
+                table.insert(pets, {
                     uid            = tostring(uid),
-                    name           = tostring(item.Category or rec.Category or "Unknown"),
-                    ratePerSecond  = safeNum(rec.MoneyPerSecond),  -- field utama untuk frontend
-                    moneyPerSecond = safeNum(rec.MoneyPerSecond),  -- alias
-                    weightKg       = safeNum(item.Scale or 0),     -- Scale dipakai sebagai proxy berat
+                    name           = tostring(item.Category or "Unknown"),
+                    moneyPerSecond = safeNum(rec.MoneyPerSecond),
+                    ratePerSecond  = safeNum(rec.MoneyPerSecond),
                     scale          = safeNum(item.Scale or 1),
                     baseMutation   = tostring(item.BaseMutation or ""),
                     mutations      = muts,
@@ -179,120 +240,41 @@ local function getEggAndPlotData(stats)
                 })
             end
         end
-
-        -- Sort by moneyPerSecond descending
-        table.sort(placedEggs, function(a, b)
-            return a.moneyPerSecond > b.moneyPerSecond
-        end)
-
-        if #placedEggs > 0 then
-            stats.placedEggs     = placedEggs
-            stats.placedEggCount = #placedEggs
-            warn("[SagaMonitor] ✅ placedEggs collected: " .. #placedEggs)
-
-            -- Enrich dengan weightKg dari FetchEggRecord (async, best-effort)
-            task.spawn(function()
-                for _, egg in ipairs(placedEggs) do
-                    pcall(function()
-                        local rec2 = EggState.FetchEggRecord(egg.uid)
-                        if type(rec2) == "table" then
-                            -- WeightKg dari Placement atau AssetScale
-                            if rec2.Placement and type(rec2.Placement) == "table" then
-                                -- tidak ada weightKg di Placement
-                            end
-                            -- Scale sebagai proxy weightKg (game pakai scale = ukuran relatif)
-                            egg.weightKg = safeNum(rec2.AssetScale or egg.scale or 0)
-                            egg.hasParasite = rec2.HasParasite == true
-                        end
-                    end)
-                end
-                -- Update stats setelah enrich
-                stats.placedEggs = placedEggs
-            end)
-        else
-            warn("[SagaMonitor] ⚠️ placedEggs: 0 records found")
+        table.sort(pets, function(a, b) return a.ratePerSecond > b.ratePerSecond end)
+        if #pets > 0 then
+            stats.pets     = pets
+            stats.petCount = #pets
         end
     end)
 
     -- ── Plot snapshot dari PlotState ───────────────────────────────
     pcall(function()
+        if not ok3 then return end
         local slotNum = PlotState.ResolveLocalSlot()
         if type(slotNum) ~= "number" then return end
 
         local folder = PlotState.ResolveFolder(slotNum)
-        if not folder then return end
-
-        -- folder = "Plots" (Folder), slot = Model di dalamnya
-        local plotModel = nil
-        if typeof(folder) == "Instance" then
-            plotModel = folder:FindFirstChild(tostring(slotNum))
-        end
-
         local plotLevel = 0
-        if plotModel then
-            -- BaseUpgradeLevel ada di attribute
-            local lvl = plotModel:GetAttribute("BaseUpgradeLevel")
-            if lvl then plotLevel = safeNum(lvl) end
+        if typeof(folder) == "Instance" then
+            local plotModel = folder:FindFirstChild(tostring(slotNum))
+            if plotModel then
+                local lvl = plotModel:GetAttribute("BaseUpgradeLevel")
+                if lvl then plotLevel = safeNum(lvl) end
+            end
         end
 
-        -- Income dari leaderstats (sudah ada di stats.leaderstats)
         local income = 0
         if stats.leaderstats then
             income = safeNum(stats.leaderstats["Money/s"] or 0)
         end
 
         stats.plotSnapshot = {
-            slotNumber     = slotNum,
-            plotLevel      = plotLevel,
-            placedEggCount = stats.placedEggCount or 0,
-            income         = income,
+            slotNumber    = slotNum,
+            plotLevel     = plotLevel,
+            plotEggCount  = stats.plotEggCount or 0,
+            petCount      = stats.petCount or 0,
+            income        = income,
         }
-    end)
-
-    -- ── Per-egg detail via FetchEggRecord (ambil dari PlacedEggRenders) ──
-    -- Hanya enrichment tambahan — skip kalau sudah ada placedEggs
-    pcall(function()
-        if stats.placedEggs and #stats.placedEggs > 0 then return end
-
-        -- Fallback: baca dari PlacedEggRenders di workspace
-        local myId = tostring(lp.UserId)
-        local ws = game:GetService("Workspace")
-        local renders = ws:FindFirstChild("PlacedEggRenders")
-        if not renders then return end
-
-        local eggs = {}
-        for _, model in ipairs(renders:GetChildren()) do
-            if model.Name:sub(1, #myId) == myId then
-                local uid = model.Name:sub(#myId + 2)
-                local ok, rec = pcall(function()
-                    return EggState.FetchEggRecord(uid)
-                end)
-                if ok and type(rec) == "table" then
-                    local muts = {}
-                    if type(rec.Mutations) == "table" then
-                        for _, m in ipairs(rec.Mutations) do
-                            table.insert(muts, tostring(m))
-                        end
-                    end
-                    local placedAt = 0
-                    if type(rec.Placement) == "table" then
-                        placedAt = safeNum(rec.Placement.PlacedAt)
-                    end
-                    table.insert(eggs, {
-                        uid          = uid,
-                        name         = tostring(rec.AssetCategory or "Unknown"),
-                        scale        = safeNum(rec.AssetScale or 1),
-                        baseMutation = tostring(rec.BaseMutation or ""),
-                        mutations    = muts,
-                        placedAt     = placedAt,
-                    })
-                end
-            end
-        end
-        if #eggs > 0 then
-            stats.placedEggs     = eggs
-            stats.placedEggCount = #eggs
-        end
     end)
 end
 
