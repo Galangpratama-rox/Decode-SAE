@@ -316,8 +316,114 @@ local function getFieldEggs()
 end
 
 -- ============================================================
--- MAIN DATA COLLECTOR
+-- DEBUG HELPER — jalankan sekali untuk lihat struktur workspace
+-- Hapus atau comment setelah dapat info yang dibutuhkan
 -- ============================================================
+local function debugSAEStructure()
+    warn("[SagaDebug] === MULAI SCAN STRUKTUR SAE ===")
+
+    -- 1. Scan workspace top-level
+    pcall(function()
+        local ws = game:GetService("Workspace")
+        local names = {}
+        for _, c in ipairs(ws:GetChildren()) do
+            table.insert(names, c.Name .. "(" .. c.ClassName .. ")")
+        end
+        warn("[SagaDebug] Workspace children: " .. table.concat(names, ", "))
+    end)
+
+    -- 2. Scan ReplicatedStorage top-level
+    pcall(function()
+        local rs2 = game:GetService("ReplicatedStorage")
+        local names = {}
+        for _, c in ipairs(rs2:GetChildren()) do
+            table.insert(names, c.Name .. "(" .. c.ClassName .. ")")
+        end
+        warn("[SagaDebug] ReplicatedStorage children: " .. table.concat(names, ", "))
+    end)
+
+    -- 3. Cari folder Remotes / Remote
+    pcall(function()
+        local rs2 = game:GetService("ReplicatedStorage")
+        for _, name in ipairs({"Remotes","Remote","Events","Functions","Network"}) do
+            local f = rs2:FindFirstChild(name)
+            if f then
+                local sub = {}
+                for _, c in ipairs(f:GetChildren()) do
+                    table.insert(sub, c.Name .. "(" .. c.ClassName .. ")")
+                end
+                warn("[SagaDebug] " .. name .. ": " .. table.concat(sub, ", "))
+            end
+        end
+    end)
+
+    -- 4. Cari leaderstats dan semua child player
+    pcall(function()
+        local childNames = {}
+        for _, c in ipairs(lp:GetChildren()) do
+            table.insert(childNames, c.Name .. "(" .. c.ClassName .. ")")
+        end
+        warn("[SagaDebug] LocalPlayer children: " .. table.concat(childNames, ", "))
+    end)
+
+    -- 5. Cari Bases/Plots di workspace
+    pcall(function()
+        local ws = game:GetService("Workspace")
+        for _, folderName in ipairs({"Bases","Plots","PlayerPlots","Areas","Map","World","EggWorld"}) do
+            local f = ws:FindFirstChild(folderName)
+            if f then
+                local sub = {}
+                for _, c in ipairs(f:GetChildren()) do
+                    table.insert(sub, c.Name)
+                end
+                warn("[SagaDebug] Workspace." .. folderName .. " (" .. #sub .. " items): " .. table.concat(sub, ", "):sub(1, 200))
+            end
+        end
+    end)
+
+    -- 6. Cari plot milik player
+    pcall(function()
+        local ws = game:GetService("Workspace")
+        local function searchForPlot(parent, depth)
+            if depth > 3 then return end
+            for _, obj in ipairs(parent:GetChildren()) do
+                -- Cek apakah ada Owner/OwnerUserId child
+                local ownerV = obj:FindFirstChild("Owner") or obj:FindFirstChild("OwnerUserId")
+                if ownerV and tostring(ownerV.Value) == tostring(lp.UserId) then
+                    warn("[SagaDebug] PLOT DITEMUKAN: " .. obj:GetFullName())
+                    -- Dump children plot
+                    local plotChildren = {}
+                    for _, pc in ipairs(obj:GetChildren()) do
+                        table.insert(plotChildren, pc.Name .. "(" .. pc.ClassName .. ")")
+                    end
+                    warn("[SagaDebug] Plot children: " .. table.concat(plotChildren, ", "))
+                end
+                searchForPlot(obj, depth + 1)
+            end
+        end
+        searchForPlot(ws, 0)
+    end)
+
+    -- 7. Cek __FYY_ACCESS_HANDOFF
+    pcall(function()
+        local ge2 = (getgenv and getgenv()) or _G
+        local ho = rawget(ge2, "__FYY_ACCESS_HANDOFF")
+        if ho then
+            warn("[SagaDebug] Handoff keys: " .. table.concat((function()
+                local k = {}
+                for key in pairs(ho) do table.insert(k, tostring(key)) end
+                return k
+            end)(), ", "))
+        else
+            warn("[SagaDebug] Handoff: nil")
+        end
+    end)
+
+    warn("[SagaDebug] === SCAN SELESAI ===")
+end
+
+-- Jalankan debug 3 detik setelah load
+task.delay(3, debugSAEStructure)
 local function getPlayerStats()
     local stats = {}
 
