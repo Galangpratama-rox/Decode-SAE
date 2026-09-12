@@ -108,39 +108,130 @@ end
 -- ============================================================
 
 -- Parse plot eggs dari webhook payload yang sudah di-intercept di OneFile
-local function parsePlotEggsFromWebhook(payload)
+-- Format components v2: components[1].components[5] = Plot Eggs
+--                       components[1].components[6] = Active Pets
+--                       components[1].components[3].components[2] = Plot Summary
+local function parseWebhookPayload(payload)
     if type(payload) ~= "table" then return nil end
-    -- Runtime FyyCommunity kirim data plot via content string
-    -- Format: "Plot Eggs · N\n• Name · Rarity · Kg · $/s\n..."
-    -- Atau via embeds/components
-    local content = tostring(payload.content or "")
-    if #content < 5 then return nil end
 
-    local eggs = {}
-    -- Pattern: "• {name} · {rarity} · {weight} Kg · ${rate}/s"
-    for line in content:gmatch("[^\n]+") do
-        local name, rarity, weight, rate = line:match(
-            "^[•·%*%-]%s*(.-)%s*[·%·]%s*(.-)%s*[·%·]%s*([%d%.]+)%s*Kg%s*[·%·]%s*%$([%d%.]+[KMBT]?)/s"
-        )
-        if name and rarity and weight and rate then
-            -- Convert rate string ke number (1.07B → 1070000000)
-            local rateNum = tonumber(rate) or 0
-            local suffix = rate:match("[KMBT]$")
-            if suffix == "K" then rateNum = rateNum * 1e3
-            elseif suffix == "M" then rateNum = rateNum * 1e6
-            elseif suffix == "B" then rateNum = rateNum * 1e9
-            elseif suffix == "T" then rateNum = rateNum * 1e12
+    local result = {}
+
+    -- Navigasi ke components[1].components
+    local c1 = type(payload.components) == "table" and payload.components[1]
+    if not c1 or type(c1.components) ~= "table" then return nil end
+    local inner = c1.components
+
+    -- Helper: ambil content dari component by index
+    local function getContent(idx)
+        local c = inner[idx]
+        if c and type(c.content) == "string" then return c.content end
+        return nil
+    end
+
+    -- Helper: parse number string seperti "1.07B", "35.2M", "98.32B"
+    local function parseNum(s)
+        if not s then return 0 end
+        s = s:gsub(",", ""):gsub("%s", "")
+        local num = tonumber(s:match("^([%d%.]+)")) or 0
+        local suf = s:match("[KMBTkmbt]$")
+        if suf then suf = suf:upper() end
+        if suf == "K" then return num * 1e3
+        elseif suf == "M" then return num * 1e6
+        elseif suf == "B" then return num * 1e9
+        elseif suf == "T" then return num * 1e12
+        end
+        return num
+    end
+
+    -- ── Plot Eggs (component index 5) ─────────────────────────────
+    -- Format: "• **Name** · Rarity · **Kg Kg** · **$Rate/s** · Mutation"
+    -- atau:   "• **Name** · Rarity · **Kg Kg** · **$Rate/s**"
+    local plotEggsContent = getContent(5)
+    if plotEggsContent then
+        local eggs = {}
+        for line in plotEggsContent:gmatch("[^\n]+") do
+            -- Strip markdown bold
+            line = line:gsub("%*%*", "")
+            -- Pattern: "• Name · Rarity · Weight Kg · $Rate/s" dengan optional mutation
+            local name, rarity, weight, rate = line:match(
+                "^[•%*%-]%s*(.-)%s*·%s*(.-)%s*·%s*([%d%.,]+)%s*Kg%s*·%s*%$([%d%.]+[KMBT]?)/s"
+            )
+            if name and rarity and weight and rate then
+                -- Ambil mutations (sisa setelah $/s)
+                local rest = line:match("/s%s*·?%s*(.+)$") or ""
+                local muts = {}
+                for m in rest:gmatch("[^/,·]+") do
+                    local mt = m:match("^%s*(.-)%s*$")
+                    if mt and #mt > 0 then table.insert(muts, mt) end
+                end
+                table.insert(eggs, {
+                    name          = name,
+                    rarity        = rarity,
+                    weightKg      = tonumber(weight:gsub(",","")) or 0,
+                    ratePerSecond = parseNum(rate),
+                    mutations     = muts,
+                })
             end
-            table.insert(eggs, {
-                name         = name:gsub("^%s+",""):gsub("%s+$",""),
-                rarity       = rarity:gsub("^%s+",""):gsub("%s+$",""),
-                weightKg     = tonumber(weight) or 0,
-                ratePerSecond= rateNum,
-                mutations    = {},
-            })
+        end
+        if #eggs > 0 then result.plotEggs = eggs end
+    end
+
+    -- ── Active Pets (component index 6) ───────────────────────────
+    -- Format: "• **Name** · Rarity · **$Rate/s** · Mutation"
+    -- atau:   "• **Name ×N** · Rarity · **$Rate/s**"
+    local petsContent = getContent(6)
+    if petsContent then
+        local pets = {}
+        for line in petsContent:gmatch("[^\n]+") do
+            line = line:gsub("%*%*", "")
+            -- Coba match dengan ×N (grouped)
+            local name, rarity, rate = line:match(
+                "^[•%*%-]%s*(.-)%s*·%s*(.-)%s*·%s*%$([%d%.]+[KMBT]?)/s"
+            )
+            if name and rarity and rate then
+                local rest = line:match("/s%s*·?%s*(.+)$") or ""
+                local muts = {}
+                for m in rest:gmatch("[^/,·]+") do
+                    local mt = m:match("^%s*(.-)%s*$")
+                    if mt and #mt > 0 then table.insert(muts, mt) end
+                end
+                table.insert(pets, {
+                    name          = name,
+                    rarity        = rarity,
+                    ratePerSecond = parseNum(rate),
+                    moneyPerSecond= parseNum(rate),
+                    mutations     = muts,
+                })
+            end
+        end
+        if #pets > 0 then result.pets = pets end
+    end
+
+    -- ── Plot Summary (component[3].components[2]) ──────────────────
+    local c3 = inner[3]
+    if type(c3) == "table" and type(c3.components) == "table" then
+        local summaryContent = type(c3.components[2]) == "table"
+            and c3.components[2].content or nil
+        if summaryContent then
+            summaryContent = summaryContent:gsub("%*%*","")
+            local income  = summaryContent:match("Income%s*·%s*%$([%d%.]+[KMBT]?)/s")
+            local speed   = summaryContent:match("Speed%s*·%s*([%d%.]+[KMBT]?)")
+            local placed  = summaryContent:match("Placed eggs%s*·%s*(%d+)")
+            local capacity= summaryContent:match("Placed eggs%s*·%s*%d+/(%d+)")
+            local active  = summaryContent:match("Active pets%s*·%s*(%d+)")
+            result.plotSnapshot = {
+                income         = parseNum(income or "0"),
+                speed          = parseNum(speed or "0"),
+                placedEggCount = tonumber(placed) or 0,
+                capacity       = tonumber(capacity) or 0,
+                activePetCount = tonumber(active) or 0,
+                plotEggCount   = result.plotEggs and #result.plotEggs or 0,
+                petCount       = result.pets and #result.pets or 0,
+            }
         end
     end
-    return #eggs > 0 and eggs or nil
+
+    return (result.plotEggs or result.pets) and result or nil
 end
 
 local function getEggAndPlotData(stats)
@@ -156,14 +247,22 @@ local function getEggAndPlotData(stats)
         local ge2 = (getgenv and getgenv()) or _G
         local payload = rawget(ge2, "__FYY_LAST_WEBHOOK_PAYLOAD")
         local ts      = rawget(ge2, "__FYY_LAST_WEBHOOK_TS") or 0
-        -- Hanya pakai kalau fresh (dalam 5 menit)
         if not payload or (os.time() - ts) > 300 then return end
 
-        local eggs = parsePlotEggsFromWebhook(payload)
-        if eggs and #eggs > 0 then
-            stats.plotEggs     = eggs
-            stats.plotEggCount = #eggs
-            warn("[SagaMonitor] ✅ plotEggs dari webhook intercept: " .. #eggs)
+        local parsed = parseWebhookPayload(payload)
+        if not parsed then return end
+
+        if parsed.plotEggs and #parsed.plotEggs > 0 then
+            stats.plotEggs     = parsed.plotEggs
+            stats.plotEggCount = #parsed.plotEggs
+            warn("[SagaMonitor] ✅ plotEggs dari webhook: " .. #parsed.plotEggs)
+        end
+        if parsed.pets and #parsed.pets > 0 then
+            stats.pets     = parsed.pets
+            stats.petCount = #parsed.pets
+        end
+        if parsed.plotSnapshot then
+            stats.plotSnapshot = parsed.plotSnapshot
         end
     end)
     if not ok1 then return end
