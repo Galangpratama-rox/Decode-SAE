@@ -283,8 +283,34 @@ local function getEggAndPlotData(stats)
             dir = Assets.Directory
         end
 
+        -- Ambil UID milik player ini dari EggState.ReadOwnedEggs
+        local myUids = {}
+        pcall(function()
+            local okE, EggStateMod = pcall(require, game:GetService("ReplicatedStorage")
+                :WaitForChild("Client", 3)
+                :WaitForChild("EggState", 3))
+            if not okE or not EggStateMod then return end
+            local okR, owned = pcall(EggStateMod.ReadOwnedEggs)
+            if not okR or type(owned) ~= "table" then return end
+            for _, entry in ipairs(owned) do
+                if type(entry) == "table"
+                    and type(entry.OwnerUserId) == "number"
+                    and entry.OwnerUserId == lp.UserId
+                    and type(entry.Records) == "table" then
+                    for recUid in pairs(entry.Records) do
+                        myUids[tostring(recUid)] = true
+                    end
+                end
+            end
+            warn("[SagaMonitor] myUids count: " .. tostring((function()
+                local n=0 for _ in pairs(myUids) do n=n+1 end return n
+            end)()))
+        end)
+
         local plotEggs = {}
         for uid, rec in pairs(records) do
+            -- Filter: hanya UID milik player ini
+            if myUids[tostring(uid)] then
             -- Hanya egg yang di-place (State=Slot) atau sudah tumbuh
             local state = tostring(rec.State or "")
             if state == "Slot" or state == "placed" or state == "" then
@@ -329,7 +355,8 @@ local function getEggAndPlotData(stats)
                         state         = state,
                     })
                 end
-            end
+            end -- state check
+            end -- myUids check
         end
 
         -- Sort by ratePerSecond descending
