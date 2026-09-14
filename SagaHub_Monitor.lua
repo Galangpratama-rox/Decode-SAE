@@ -26,7 +26,7 @@
 -- CONFIG
 -- ============================================================
 local MONITOR_ENDPOINT = "https://backend-monitoring-sae-production-a7b9.up.railway.app/api/monitor"
-local MONITOR_INTERVAL = 30   -- kirim setiap N detik
+local MONITOR_INTERVAL = 45   -- kirim setiap N detik (dinaikkan untuk performa)
 local MONITOR_KEY      = "sagahub-secret-key"
 
 -- ============================================================
@@ -234,14 +234,59 @@ local function parseWebhookPayload(payload)
     return (result.plotEggs or result.pets) and result or nil
 end
 
-local function getEggAndPlotData(stats)
-    local rs2 = game:GetService("ReplicatedStorage")
+-- ============================================================
+-- MODULE CACHE — require sekali, pakai terus
+-- ============================================================
+local _rs2        = game:GetService("ReplicatedStorage")
+local _EggState   = nil
+local _AssetRoster= nil
+local _PlotState  = nil
+local _Assets     = nil
+local _Mutations  = nil
+local _Dir        = nil  -- Assets.Directory cache
 
-    local ok1, EggState    = pcall(require, rs2.Client.EggState)
-    local ok2, AssetRoster = pcall(require, rs2.Client.AssetRoster)
-    local ok3, PlotState   = pcall(require, rs2.Client.PlotState)
-    local ok4, Assets      = pcall(require, rs2.Data.Assets)
-    local ok5, Mutations   = pcall(require, rs2.Shared.Modules.Mutations)
+local function _initModules()
+    if not _EggState then
+        local ok, m = pcall(require, _rs2.Client.EggState)
+        if ok then _EggState = m end
+    end
+    if not _AssetRoster then
+        local ok, m = pcall(require, _rs2.Client.AssetRoster)
+        if ok then _AssetRoster = m end
+    end
+    if not _PlotState then
+        local ok, m = pcall(require, _rs2.Client.PlotState)
+        if ok then _PlotState = m end
+    end
+    if not _Assets then
+        local ok, m = pcall(require, _rs2.Data.Assets)
+        if ok then
+            _Assets = m
+            if type(m) == "table" and type(m.Directory) == "table" then
+                _Dir = m.Directory
+            end
+        end
+    end
+    if not _Mutations then
+        local ok, m = pcall(require, _rs2.Shared.Modules.Mutations)
+        if ok then _Mutations = m end
+    end
+end
+
+-- Init sekali saat monitor load
+_initModules()
+
+local function getEggAndPlotData(stats)
+    local ok1 = _EggState ~= nil
+    local ok2 = _AssetRoster ~= nil
+    local ok3 = _PlotState ~= nil
+    local ok4 = _Assets ~= nil
+    local ok5 = _Mutations ~= nil
+    local EggState    = _EggState
+    local AssetRoster = _AssetRoster
+    local PlotState   = _PlotState
+    local Assets      = _Assets
+    local Mutations   = _Mutations
 
     -- ── PRIMARY: EggState.FetchEggRecord (live, setiap interval) ──
     -- Ini real-time — tidak perlu tunggu webhook Discord
@@ -276,11 +321,8 @@ local function getEggAndPlotData(stats)
         local weightUtil = sae.eggRuntime and sae.eggRuntime.weightUtil
         if type(weightUtil) ~= "table" then return end
 
-        -- Cache Assets.Directory
-        local dir = nil
-        if ok4 and type(Assets) == "table" and type(Assets.Directory) == "table" then
-            dir = Assets.Directory
-        end
+        -- Pakai _Dir cache (sudah di-init di load time)
+        local dir = _Dir
 
         -- ReadOwnedEggs: sudah filter per player
         local okR, owned = pcall(EggState.ReadOwnedEggs)
