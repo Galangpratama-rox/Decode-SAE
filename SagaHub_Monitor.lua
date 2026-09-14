@@ -262,101 +262,101 @@ local function getEggAndPlotData(stats)
         end
     end)
 
-    -- ── Live egg data dari eggRuntime.weightUtil ─────────────────
+    -- ── Live egg data: ReadOwnedEggs + weightUtil ───────────────
+    -- ReadOwnedEggs = sudah filter per player (akurat)
     -- weightUtil.WeightKg(rec) = berat aktual include growth
-    -- rate = EarningRate (Assets.Directory) * WeightKg = sama dengan webhook
+    -- rate = EarningRate * WeightKg
     pcall(function()
+        if not ok1 then return end
+
         local ge2 = (getgenv and getgenv()) or _G
         local sae = rawget(ge2, "__FyyCommunityStealAnEgg")
         if type(sae) ~= "table" then return end
 
-        local eggRuntime = sae.eggRuntime
-        if type(eggRuntime) ~= "table" then return end
+        local weightUtil = sae.eggRuntime and sae.eggRuntime.weightUtil
+        if type(weightUtil) ~= "table" then return end
 
-        local weightUtil = eggRuntime.weightUtil
-        local records    = eggRuntime.records
-        if type(weightUtil) ~= "table" or type(records) ~= "table" then return end
-
-        -- Cache Assets.Directory untuk EarningRate lookup
+        -- Cache Assets.Directory
         local dir = nil
         if ok4 and type(Assets) == "table" and type(Assets.Directory) == "table" then
             dir = Assets.Directory
         end
 
-        -- Ambil UID milik player ini dari EggState.ReadOwnedEggs
-        local myUids = {}
-        pcall(function()
-            local okE, EggStateMod = pcall(require, game:GetService("ReplicatedStorage")
-                :WaitForChild("Client", 3)
-                :WaitForChild("EggState", 3))
-            if not okE or not EggStateMod then return end
-            local okR, owned = pcall(EggStateMod.ReadOwnedEggs)
-            if not okR or type(owned) ~= "table" then return end
-            for _, entry in ipairs(owned) do
-                if type(entry) == "table"
-                    and type(entry.OwnerUserId) == "number"
-                    and entry.OwnerUserId == lp.UserId
-                    and type(entry.Records) == "table" then
-                    for recUid in pairs(entry.Records) do
-                        myUids[tostring(recUid)] = true
+        -- ReadOwnedEggs: sudah filter per player, tidak campur dengan player lain
+        local okR, owned = pcall(EggState.ReadOwnedEggs)
+        if not okR or type(owned) ~= "table" then return end
+
+        -- Cari entry milik player ini
+        local myEntry = nil
+        for _, entry in ipairs(owned) do
+            if type(entry) == "table"
+                and type(entry.OwnerUserId) == "number"
+                and entry.OwnerUserId == lp.UserId then
+                myEntry = entry
+                break
+            end
+        end
+        if not myEntry or type(myEntry.Records) ~= "table" then return end
+
+        -- eggRuntime.records: berisi rec objects dengan data lengkap
+        -- Map UID -> rec untuk lookup cepat
+        local recordMap = sae.eggRuntime.records or {}
+
+        local plotEggs = {}
+        for uid in pairs(myEntry.Records) do
+            local rec = recordMap[uid]
+            if type(rec) ~= "table" then
+                -- Coba FetchEggRecord sebagai fallback
+                local okF, r = pcall(EggState.FetchEggRecord, uid)
+                if okF and type(r) == "table" then rec = r end
+            end
+            if type(rec) == "table" then
+                local state = tostring(rec.State or "Slot")
+                -- Hanya egg yang ditanam (bukan di-carry atau di inventory)
+                if state == "Slot" or state == "placed" or state == "" then
+                    local category = tostring(rec.AssetCategory or "Unknown")
+
+                    -- WeightKg dari weightUtil (akurat, include growth)
+                    local ok_w, weightKg = pcall(weightUtil.WeightKg, rec)
+                    weightKg = (ok_w and type(weightKg) == "number" and weightKg > 0)
+                        and weightKg or 0
+
+                    -- Data dari Assets.Directory
+                    local dirEntry    = dir and dir[category]
+                    local eggData     = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
+                    local rarityData  = (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
+                    local earningRate = safeNum(dirEntry and dirEntry.EarningRate or 0)
+
+                    local displayName  = tostring(eggData.DisplayName or category .. " Egg")
+                    local rarity       = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
+                    local rarityNumber = safeNum(rarityData.RarityNumber or 0)
+
+                    -- rate = EarningRate * WeightKg (rumus SAE = sama dengan webhook)
+                    local ratePerSec = earningRate * weightKg
+
+                    -- Mutations
+                    local muts = {}
+                    if type(rec.Mutations) == "table" then
+                        for _, m in ipairs(rec.Mutations) do
+                            table.insert(muts, tostring(m))
+                        end
+                    end
+
+                    if weightKg > 0 then
+                        table.insert(plotEggs, {
+                            uid           = uid,
+                            name          = displayName,
+                            category      = category,
+                            rarity        = rarity,
+                            rarityNumber  = rarityNumber,
+                            weightKg      = math.floor(weightKg * 100) / 100,
+                            ratePerSecond = math.floor(ratePerSec * 100) / 100,
+                            mutations     = muts,
+                            hasParasite   = rec.HasParasite == true,
+                        })
                     end
                 end
             end
-            warn("[SagaMonitor] myUids count: " .. tostring((function()
-                local n=0 for _ in pairs(myUids) do n=n+1 end return n
-            end)()))
-        end)
-
-        local plotEggs = {}
-        for uid, rec in pairs(records) do
-            -- Filter: hanya UID milik player ini
-            if myUids[tostring(uid)] then
-            -- Hanya egg yang di-place (State=Slot) atau sudah tumbuh
-            local state = tostring(rec.State or "")
-            if state == "Slot" or state == "placed" or state == "" then
-                local category = tostring(rec.AssetCategory or "Unknown")
-
-                -- WeightKg dari weightUtil (akurat, include growth)
-                local ok_w, weightKg = pcall(weightUtil.WeightKg, rec)
-                weightKg = (ok_w and type(weightKg) == "number") and weightKg or 0
-
-                -- Data dari Assets.Directory
-                local dirEntry    = dir and dir[category]
-                local eggData     = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
-                local rarityData  = (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
-                local earningRate = safeNum(dirEntry and dirEntry.EarningRate or 0)
-
-                local displayName  = tostring(eggData.DisplayName or category .. " Egg")
-                local rarity       = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
-                local rarityNumber = safeNum(rarityData.RarityNumber or 0)
-
-                -- Rate = EarningRate * WeightKg (rumus SAE, sama dengan webhook)
-                local ratePerSec = earningRate * weightKg
-
-                -- Mutations
-                local muts = {}
-                if type(rec.Mutations) == "table" then
-                    for _, m in ipairs(rec.Mutations) do
-                        table.insert(muts, tostring(m))
-                    end
-                end
-
-                if weightKg > 0 then
-                    table.insert(plotEggs, {
-                        uid           = uid,
-                        name          = displayName,
-                        category      = category,
-                        rarity        = rarity,
-                        rarityNumber  = rarityNumber,
-                        weightKg      = math.floor(weightKg * 100) / 100,
-                        ratePerSecond = math.floor(ratePerSec * 100) / 100,
-                        mutations     = muts,
-                        hasParasite   = rec.HasParasite == true,
-                        state         = state,
-                    })
-                end
-            end -- state check
-            end -- myUids check
         end
 
         -- Sort by ratePerSecond descending
@@ -367,9 +367,10 @@ local function getEggAndPlotData(stats)
         if #plotEggs > 0 then
             stats.plotEggs     = plotEggs
             stats.plotEggCount = #plotEggs
-            warn("[SagaMonitor] plotEggs from weightUtil: " .. #plotEggs)
+            warn("[SagaMonitor] plotEggs: " .. #plotEggs)
         end
     end)
+
 
     -- ── Pets dari AssetRoster.ReadSnapshot ────────────────────────
     -- (ini adalah pets yang di-equip/di-pen, bukan eggs)
