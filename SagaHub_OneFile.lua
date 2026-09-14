@@ -777,6 +777,11 @@ do
                 end
             end
             pcall(wf, "FyyCommunity/license.key", "FYY-BYPASS-KEYLESS")
+            -- Tulis ke autoexec Delta agar auto-execute setiap rejoin/hop
+            local _SAGA_EXEC = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua", true))()'
+            for _, autopath in ipairs({"autoexec/SagaHub.lua","auto-exec/SagaHub.lua","autorun/SagaHub.lua"}) do
+                pcall(wf, autopath, _SAGA_EXEC)
+            end
         end
     end)
 end
