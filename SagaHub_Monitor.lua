@@ -262,106 +262,72 @@ local function getEggAndPlotData(stats)
         end
     end)
 
-    -- ── Live egg data dari EggState.FetchEggRecord ────────────────
+    -- ── Live egg data dari eggRuntime.weightUtil ─────────────────
+    -- weightUtil.WeightKg(rec) = berat aktual include growth
+    -- rate = EarningRate (Assets.Directory) * WeightKg = sama dengan webhook
     pcall(function()
-        local myId   = tostring(lp.UserId)
-        local myPrefix = myId .. "_"   -- exact prefix: "11624556573_"
-        local ws     = game:GetService("Workspace")
-        local renders = ws:FindFirstChild("PlacedEggRenders")
-        if not renders then return end
+        local ge2 = (getgenv and getgenv()) or _G
+        local sae = rawget(ge2, "__FyyCommunityStealAnEgg")
+        if type(sae) ~= "table" then return end
 
-        -- Cache Assets.Directory agar tidak require ulang tiap egg
-        local dir = (ok4 and type(Assets) == "table" and type(Assets.Directory) == "table")
-            and Assets.Directory or nil
+        local eggRuntime = sae.eggRuntime
+        if type(eggRuntime) ~= "table" then return end
+
+        local weightUtil = eggRuntime.weightUtil
+        local records    = eggRuntime.records
+        if type(weightUtil) ~= "table" or type(records) ~= "table" then return end
+
+        -- Cache Assets.Directory untuk EarningRate lookup
+        local dir = nil
+        if ok4 and type(Assets) == "table" and type(Assets.Directory) == "table" then
+            dir = Assets.Directory
+        end
 
         local plotEggs = {}
-        for _, model in ipairs(renders:GetChildren()) do
-            -- Exact match: nama harus mulai dengan "{userId}_"
-            if model.Name:sub(1, #myPrefix) == myPrefix then
-                local uid = model.Name:sub(#myPrefix + 1)
-                local okR, rec = pcall(function()
-                    return EggState.FetchEggRecord(uid)
-                end)
-                if okR and type(rec) == "table" then
-                    local category = tostring(rec.AssetCategory or "Unknown")
+        for uid, rec in pairs(records) do
+            -- Hanya egg yang di-place (State=Slot) atau sudah tumbuh
+            local state = tostring(rec.State or "")
+            if state == "Slot" or state == "placed" or state == "" then
+                local category = tostring(rec.AssetCategory or "Unknown")
 
-                    -- Lookup Assets.Directory HANYA untuk nama dan rarity display
-                    local dirEntry   = dir and dir[category]
-                    local eggData    = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
-                    local rarityData = (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
+                -- WeightKg dari weightUtil (akurat, include growth)
+                local ok_w, weightKg = pcall(weightUtil.WeightKg, rec)
+                weightKg = (ok_w and type(weightKg) == "number") and weightKg or 0
 
-                    local displayName  = tostring(eggData.DisplayName or rec.DisplayName or category .. " Egg")
-                    local rarity       = tostring(rarityData._id or rarityData.DisplayName or rec.RarityId or "Unknown")
-                    local rarityNumber = safeNum(rarityData.RarityNumber or 0)
+                -- Data dari Assets.Directory
+                local dirEntry    = dir and dir[category]
+                local eggData     = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
+                local rarityData  = (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
+                local earningRate = safeNum(dirEntry and dirEntry.EarningRate or 0)
 
-                    -- Mutations
-                    local muts = {}
-                    if type(rec.Mutations) == "table" then
-                        for _, m in ipairs(rec.Mutations) do
-                            table.insert(muts, tostring(m))
-                        end
+                local displayName  = tostring(eggData.DisplayName or category .. " Egg")
+                local rarity       = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
+                local rarityNumber = safeNum(rarityData.RarityNumber or 0)
+
+                -- Rate = EarningRate * WeightKg (rumus SAE, sama dengan webhook)
+                local ratePerSec = earningRate * weightKg
+
+                -- Mutations
+                local muts = {}
+                if type(rec.Mutations) == "table" then
+                    for _, m in ipairs(rec.Mutations) do
+                        table.insert(muts, tostring(m))
                     end
+                end
 
-                    -- Scale
-                    local scale = safeNum(rec.AssetScale or 1)
-
-                    -- WEIGHT: pakai dari rec langsung (bukan Assets.Directory)
-                    -- rec.WeightKg = berat aktual yang sudah include growth/scale
-                    -- rec.WeightKgForScale = alternatif
-                    -- Fallback: eggData.WeightKg * scale (kurang akurat)
-                    local actualWeightKg
-                    if safeNum(rec.WeightKg) > 0 then
-                        actualWeightKg = safeNum(rec.WeightKg)
-                    elseif safeNum(rec.WeightKgForScale) > 0 then
-                        actualWeightKg = safeNum(rec.WeightKgForScale)
-                    else
-                        actualWeightKg = safeNum(eggData.WeightKg or 0) * scale
-                    end
-
-                    -- RATE: pakai LiveRatePerSecond dari rec (sudah dihitung game)
-                    -- Ini persis sama dengan yang ditampilkan webhook FyyCommunity
-                    local computedRate
-                    if safeNum(rec.LiveRatePerSecond) > 0 then
-                        computedRate = safeNum(rec.LiveRatePerSecond)
-                    elseif safeNum(rec.RatePerSecond) > 0 then
-                        computedRate = safeNum(rec.RatePerSecond)
-                    else
-                        -- Last resort: base earning * weight
-                        local baseEarning = safeNum(dirEntry and dirEntry.EarningRate or 0)
-                        computedRate = baseEarning * actualWeightKg
-                    end
-
-                    -- PlacedAt dari Placement
-                    local placedAt = 0
-                    if type(rec.Placement) == "table" then
-                        placedAt = safeNum(rec.Placement.PlacedAt)
-                    end
-
+                if weightKg > 0 then
                     table.insert(plotEggs, {
                         uid           = uid,
                         name          = displayName,
                         category      = category,
                         rarity        = rarity,
                         rarityNumber  = rarityNumber,
-                        ratePerSecond = math.floor(computedRate * 100) / 100,
-                        weightKg      = math.floor(actualWeightKg * 100) / 100,
-                        scale         = scale,
+                        weightKg      = math.floor(weightKg * 100) / 100,
+                        ratePerSecond = math.floor(ratePerSec * 100) / 100,
                         mutations     = muts,
-                        baseMutation  = tostring(rec.BaseMutation or ""),
                         hasParasite   = rec.HasParasite == true,
-                        placedAt      = placedAt,
+                        state         = state,
                     })
-                    -- Debug: log 1 egg untuk cek nilai dari rec
-                    if #plotEggs == 1 then
-                        warn(string.format("[SagaMonitor] DEBUG egg[1]: %s | WeightKg=%.2f | LiveRate=%.0f | Scale=%.2f | rec.WeightKg=%s | rec.LiveRatePerSecond=%s",
-                            displayName,
-                            actualWeightKg,
-                            computedRate,
-                            scale,
-                            tostring(rec.WeightKg),
-                            tostring(rec.LiveRatePerSecond)
-                        ))
-                    end
                 end
             end
         end
@@ -372,11 +338,9 @@ local function getEggAndPlotData(stats)
         end)
 
         if #plotEggs > 0 then
-            stats.plotEggs      = plotEggs
-            stats.plotEggCount  = #plotEggs
-            warn("[SagaMonitor] ✅ plotEggs collected: " .. #plotEggs)
-        else
-            warn("[SagaMonitor] ⚠️ plotEggs: 0 eggs found in PlacedEggRenders")
+            stats.plotEggs     = plotEggs
+            stats.plotEggCount = #plotEggs
+            warn("[SagaMonitor] plotEggs from weightUtil: " .. #plotEggs)
         end
     end)
 
