@@ -313,11 +313,29 @@ local function getEggAndPlotData(stats)
                         end
                     end
 
-                    -- Scale dari FetchEggRecord (ukuran visual, bukan berat)
-                    local scale = safeNum(rec.AssetScale or 1)
+                    -- Rate per second:
+                    -- Priority 1: LiveRatePerSecond dari rec (sudah include weight+scale+mutations)
+                    -- Priority 2: EarningRate * WeightKg * Scale (kalkulasi manual)
+                    -- Priority 3: EarningRate saja (base, kurang akurat)
+                    local liveRate = safeNum(rec.LiveRatePerSecond or 0)
+                    local baseEarning = safeNum(eggData.EarningRate or eggData.BaseEarningRate or earningRate or 0)
+                    local computedRate = 0
+                    if liveRate > 0 then
+                        -- Pakai live rate langsung (paling akurat)
+                        computedRate = liveRate
+                    elseif baseEarning > 0 and actualWeightKg > 0 then
+                        -- Hitung: EarningRate * actualWeightKg
+                        -- EarningRate biasanya dalam $/s per kg
+                        computedRate = baseEarning * actualWeightKg
+                    else
+                        computedRate = baseEarning
+                    end
 
-                    -- Berat real = WeightKg * Scale (sama seperti yang ditampilkan webhook)
-                    local actualWeightKg = weightKg * scale
+                    -- Mutation multiplier (kalau ada dari rec)
+                    local mutMult = safeNum(rec.MutationMultiplier or 1)
+                    if mutMult > 1 then
+                        computedRate = computedRate * mutMult
+                    end
 
                     -- PlacedAt dari Placement
                     local placedAt = 0
@@ -331,7 +349,7 @@ local function getEggAndPlotData(stats)
                         category      = category,
                         rarity        = rarity,
                         rarityNumber  = rarityNumber,
-                        ratePerSecond = earningRate,
+                        ratePerSecond = math.floor(computedRate * 100) / 100,
                         weightKg      = math.floor(actualWeightKg * 100) / 100,
                         scale         = scale,
                         mutations     = muts,
