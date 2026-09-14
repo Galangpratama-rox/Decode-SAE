@@ -285,16 +285,14 @@ local function getEggAndPlotData(stats)
                 if okR and type(rec) == "table" then
                     local category = tostring(rec.AssetCategory or "Unknown")
 
-                    -- Lookup di Assets.Directory untuk nama, rarity, weightKg, earningRate
-                    local dirEntry  = dir and dir[category]
-                    local eggData   = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
-                    local rarityData= (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
+                    -- Lookup Assets.Directory HANYA untuk nama dan rarity display
+                    local dirEntry   = dir and dir[category]
+                    local eggData    = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
+                    local rarityData = (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
 
-                    local displayName   = tostring(eggData.DisplayName or category .. " Egg")
-                    local weightKg      = safeNum(eggData.WeightKg or 0)
-                    local earningRate   = safeNum(dirEntry and dirEntry.EarningRate or 0)
-                    local rarity        = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
-                    local rarityNumber  = safeNum(rarityData.RarityNumber or 0)
+                    local displayName  = tostring(eggData.DisplayName or rec.DisplayName or category .. " Egg")
+                    local rarity       = tostring(rarityData._id or rarityData.DisplayName or rec.RarityId or "Unknown")
+                    local rarityNumber = safeNum(rarityData.RarityNumber or 0)
 
                     -- Mutations
                     local muts = {}
@@ -304,30 +302,33 @@ local function getEggAndPlotData(stats)
                         end
                     end
 
-                    -- Scale dari FetchEggRecord (ukuran visual → berat aktual)
+                    -- Scale
                     local scale = safeNum(rec.AssetScale or 1)
-                    -- Berat real = WeightKg * Scale
-                    local actualWeightKg = weightKg * scale
 
-                    -- Rate per second:
-                    -- Priority 1: LiveRatePerSecond dari rec (sudah include weight+scale+mutations)
-                    -- Priority 2: EarningRate * WeightKg * Scale (kalkulasi manual)
-                    -- Priority 3: EarningRate saja (base, kurang akurat)
-                    local liveRate = safeNum(rec.LiveRatePerSecond or 0)
-                    local baseEarning = safeNum(eggData.EarningRate or eggData.BaseEarningRate or earningRate or 0)
-                    local computedRate = 0
-                    if liveRate > 0 then
-                        computedRate = liveRate
-                    elseif baseEarning > 0 and actualWeightKg > 0 then
-                        computedRate = baseEarning * actualWeightKg
+                    -- WEIGHT: pakai dari rec langsung (bukan Assets.Directory)
+                    -- rec.WeightKg = berat aktual yang sudah include growth/scale
+                    -- rec.WeightKgForScale = alternatif
+                    -- Fallback: eggData.WeightKg * scale (kurang akurat)
+                    local actualWeightKg
+                    if safeNum(rec.WeightKg) > 0 then
+                        actualWeightKg = safeNum(rec.WeightKg)
+                    elseif safeNum(rec.WeightKgForScale) > 0 then
+                        actualWeightKg = safeNum(rec.WeightKgForScale)
                     else
-                        computedRate = baseEarning
+                        actualWeightKg = safeNum(eggData.WeightKg or 0) * scale
                     end
 
-                    -- Mutation multiplier
-                    local mutMult = safeNum(rec.MutationMultiplier or 1)
-                    if mutMult > 1 then
-                        computedRate = computedRate * mutMult
+                    -- RATE: pakai LiveRatePerSecond dari rec (sudah dihitung game)
+                    -- Ini persis sama dengan yang ditampilkan webhook FyyCommunity
+                    local computedRate
+                    if safeNum(rec.LiveRatePerSecond) > 0 then
+                        computedRate = safeNum(rec.LiveRatePerSecond)
+                    elseif safeNum(rec.RatePerSecond) > 0 then
+                        computedRate = safeNum(rec.RatePerSecond)
+                    else
+                        -- Last resort: base earning * weight
+                        local baseEarning = safeNum(dirEntry and dirEntry.EarningRate or 0)
+                        computedRate = baseEarning * actualWeightKg
                     end
 
                     -- PlacedAt dari Placement
@@ -350,6 +351,17 @@ local function getEggAndPlotData(stats)
                         hasParasite   = rec.HasParasite == true,
                         placedAt      = placedAt,
                     })
+                    -- Debug: log 1 egg untuk cek nilai dari rec
+                    if #plotEggs == 1 then
+                        warn(string.format("[SagaMonitor] DEBUG egg[1]: %s | WeightKg=%.2f | LiveRate=%.0f | Scale=%.2f | rec.WeightKg=%s | rec.LiveRatePerSecond=%s",
+                            displayName,
+                            actualWeightKg,
+                            computedRate,
+                            scale,
+                            tostring(rec.WeightKg),
+                            tostring(rec.LiveRatePerSecond)
+                        ))
+                    end
                 end
             end
         end
