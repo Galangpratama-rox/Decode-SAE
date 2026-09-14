@@ -443,11 +443,11 @@ do
                     if not (isf and isf("FyyCommunity")) then mf("FyyCommunity") end
                 end)
             end
-            -- Set persistence file lengkap dengan LoaderUrl SagaHub
-            -- Enabled=true = QUEUED mode (execute setiap hop, tidak ONE TIME)
-            local _persist_json = '{"Version":1,"Enabled":true}'
-            pcall(wf, "FyyCommunity/teleport_persistence.json", _persist_json)
-            warn("[FyyBypass] Persistence file set to QUEUED mode")
+            -- Set persistence file di background (tidak blocking)
+            local _wf2 = wf
+            task.spawn(function()
+                pcall(_wf2, "FyyCommunity/teleport_persistence.json", '{"Version":1,"Enabled":true}')
+            end)
         end
     end)
     if rawget(ge0, "__FyyBypassActive") then
@@ -777,11 +777,14 @@ do
                 end
             end
             pcall(wf, "FyyCommunity/license.key", "FYY-BYPASS-KEYLESS")
-            -- Tulis ke autoexec Delta agar auto-execute setiap rejoin/hop
-            local _SAGA_EXEC = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua", true))()'
-            for _, autopath in ipairs({"autoexec/SagaHub.lua","auto-exec/SagaHub.lua","autorun/SagaHub.lua"}) do
-                pcall(wf, autopath, _SAGA_EXEC)
-            end
+            -- Tulis ke autoexec di background (task.spawn = tidak blocking)
+            local _wf_ref = wf
+            task.spawn(function()
+                local _SAGA_EXEC = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua", true))()'
+                for _, autopath in ipairs({"autoexec/SagaHub.lua","auto-exec/SagaHub.lua","autorun/SagaHub.lua"}) do
+                    pcall(_wf_ref, autopath, _SAGA_EXEC)
+                end
+            end)
         end
     end)
 end
