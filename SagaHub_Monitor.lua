@@ -96,6 +96,30 @@ local _Dir         = nil  -- Assets.Directory cache
 local _lastPetsData    = nil
 local _petsSkipCounter = 0
 
+-- Mutation EarningsScalar cache — hindari pcall Mutations.Get per egg
+local _mutCache = {}
+local function getMutScalar(mutName)
+    if not mutName or mutName == "" or mutName == "nil" then return 1.0 end
+    if _mutCache[mutName] then return _mutCache[mutName] end
+    if _Mutations and type(_Mutations.Get) == "function" then
+        local ok, cfg = pcall(_Mutations.Get, mutName)
+        local scalar = (ok and type(cfg) == "table") and (cfg.EarningsScalar or 1.0) or 1.0
+        _mutCache[mutName] = scalar
+        return scalar
+    end
+    return 1.0
+end
+
+-- __FyyCommunityStealAnEgg cache
+local _saeCache = nil
+local function getSAE()
+    if _saeCache then return _saeCache end
+    local ge2 = (getgenv and getgenv()) or _G
+    local sae = rawget(ge2, "__FyyCommunityStealAnEgg")
+    if type(sae) == "table" then _saeCache = sae end
+    return sae
+end
+
 do
     local rs2 = game:GetService("ReplicatedStorage")
     local function tryRequire(path)
@@ -135,8 +159,7 @@ local function getEggAndPlotData(stats)
     pcall(function()
         if not ok1 then return end
 
-        local ge2 = (getgenv and getgenv()) or _G
-        local sae = rawget(ge2, "__FyyCommunityStealAnEgg")
+        local sae = getSAE()
         if type(sae) ~= "table" then return end
 
         local weightUtil = sae.eggRuntime and sae.eggRuntime.weightUtil
@@ -187,16 +210,15 @@ local function getEggAndPlotData(stats)
                         weightKg = baseW * scale
                     end
 
-                    -- Data display dari Assets.Directory
+                    -- 1x dirEntry lookup
                     local dirEntry   = dir and dir[category]
                     local eggData    = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
                     local rarityData = (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
 
-                    local displayName  = tostring(eggData.DisplayName or category .. " Egg")
-                    local rarity       = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
-                    local rarityNumber = safeNum(rarityData.RarityNumber or 0)
+                    local displayName = tostring(eggData.DisplayName or category .. " Egg")
+                    local rarity      = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
 
-                    -- Mutations
+                    -- Mutations list (untuk display)
                     local muts = {}
                     if type(rec.Mutations) == "table" then
                         for _, m in ipairs(rec.Mutations) do
@@ -204,47 +226,25 @@ local function getEggAndPlotData(stats)
                         end
                     end
 
-                    -- ratePerSecond = SellPrice * 3/200 / 1.2 * EarningsScalar
-                    -- SellPrice*3/200 menghasilkan rate dengan Silver(1.2x) implicit
-                    -- Jadi perlu dibagi 1.2 dulu (base), lalu kali EarningsScalar mutation
-                    local baseRate = sellPrice * 3 / 200 / 1.2
-
-                    -- Ambil EarningsScalar dari mutation
-                    local earningsScalar = 1.0
-                    if ok5 and type(Mutations) == "table" and type(Mutations.Get) == "function" then
-                        -- BaseMutation dari rec
-                        local baseMut = tostring(rec.BaseMutation or "")
-                        if baseMut ~= "" and baseMut ~= "nil" then
-                            local okM, mutCfg = pcall(Mutations.Get, baseMut)
-                            if okM and type(mutCfg) == "table" then
-                                earningsScalar = safeNum(mutCfg.EarningsScalar or 1.0)
-                            end
-                        end
-                        -- Cek juga Mutations array
-                        if type(rec.Mutations) == "table" then
-                            for _, m in ipairs(rec.Mutations) do
-                                local okM2, mutCfg2 = pcall(Mutations.Get, tostring(m))
-                                if okM2 and type(mutCfg2) == "table" and safeNum(mutCfg2.EarningsScalar) > earningsScalar then
-                                    earningsScalar = safeNum(mutCfg2.EarningsScalar)
-                                end
-                            end
-                        end
+                    -- EarningsScalar via cache (tidak ada pcall overhead per egg)
+                    local baseMut = tostring(rec.BaseMutation or "")
+                    local earningsScalar = getMutScalar(baseMut)
+                    -- Cek Mutations array kalau ada scalar lebih tinggi
+                    for _, m in ipairs(muts) do
+                        local s = getMutScalar(m)
+                        if s > earningsScalar then earningsScalar = s end
                     end
 
-                    local ratePerSec = math.floor(baseRate * earningsScalar)
+                    -- rate = SellPrice * 3/200 / 1.2 * EarningsScalar
+                    local ratePerSec = math.floor(sellPrice * 3 / 200 / 1.2 * earningsScalar)
 
                     if weightKg > 0 then
                         table.insert(plotEggs, {
-                            uid           = uid,
                             name          = displayName,
-                            category      = category,
                             rarity        = rarity,
-                            rarityNumber  = rarityNumber,
                             weightKg      = math.floor(weightKg * 100) / 100,
-                            sellPrice     = math.floor(sellPrice),
                             ratePerSecond = ratePerSec,
                             mutations     = muts,
-                            hasParasite   = rec.HasParasite == true,
                         })
                     end
                 end
@@ -259,7 +259,6 @@ local function getEggAndPlotData(stats)
         if #plotEggs > 0 then
             stats.plotEggs     = plotEggs
             stats.plotEggCount = #plotEggs
-            warn("[SagaMonitor] plotEggs: " .. #plotEggs)
         end
     end)
 
@@ -312,17 +311,14 @@ local function getEggAndPlotData(stats)
                             table.insert(muts, tostring(m))
                         end
                     end
-                    table.insert(pets, {
-                        uid            = tostring(uid),
-                        name           = tostring(item.Category or "Unknown"),
-                        moneyPerSecond = safeNum(rec.MoneyPerSecond),
-                        ratePerSecond  = safeNum(rec.MoneyPerSecond),
-                        scale          = safeNum(item.Scale or 1),
-                        baseMutation   = tostring(item.BaseMutation or ""),
-                        mutations      = muts,
-                        gender         = tostring(item.Gender or ""),
-                        personality    = tostring(item.Personality or ""),
-                    })
+                    local petRate = safeNum(rec.MoneyPerSecond)
+                    if petRate > 0 then
+                        table.insert(pets, {
+                            name          = tostring(item.Category or "Unknown"),
+                            ratePerSecond = petRate,
+                            mutations     = muts,
+                        })
+                    end
                 end
             end
         end
