@@ -313,6 +313,11 @@ local function getEggAndPlotData(stats)
                         end
                     end
 
+                    -- Scale dari FetchEggRecord (ukuran visual → berat aktual)
+                    local scale = safeNum(rec.AssetScale or 1)
+                    -- Berat real = WeightKg * Scale
+                    local actualWeightKg = weightKg * scale
+
                     -- Rate per second:
                     -- Priority 1: LiveRatePerSecond dari rec (sudah include weight+scale+mutations)
                     -- Priority 2: EarningRate * WeightKg * Scale (kalkulasi manual)
@@ -321,17 +326,14 @@ local function getEggAndPlotData(stats)
                     local baseEarning = safeNum(eggData.EarningRate or eggData.BaseEarningRate or earningRate or 0)
                     local computedRate = 0
                     if liveRate > 0 then
-                        -- Pakai live rate langsung (paling akurat)
                         computedRate = liveRate
                     elseif baseEarning > 0 and actualWeightKg > 0 then
-                        -- Hitung: EarningRate * actualWeightKg
-                        -- EarningRate biasanya dalam $/s per kg
                         computedRate = baseEarning * actualWeightKg
                     else
                         computedRate = baseEarning
                     end
 
-                    -- Mutation multiplier (kalau ada dari rec)
+                    -- Mutation multiplier
                     local mutMult = safeNum(rec.MutationMultiplier or 1)
                     if mutMult > 1 then
                         computedRate = computedRate * mutMult
