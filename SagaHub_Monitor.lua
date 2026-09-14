@@ -49,40 +49,15 @@ local handoff = rawget(ge, "__FYY_ACCESS_HANDOFF")
 -- REQUEST HELPER
 -- ============================================================
 local function doRequest(url, method, headers, body)
+    -- Pakai HttpService:RequestAsync langsung (tidak bisa di-intercept fakeReq)
     local hs2 = game:GetService("HttpService")
-    local ok1, res1 = pcall(function()
+    local ok, res = pcall(function()
         return hs2:RequestAsync({
             Url = url, Method = method or "POST",
             Headers = headers or {}, Body = body or "",
         })
     end)
-    if ok1 and res1 and (res1.StatusCode or 0) > 0 then return res1 end
-
-    local ge2    = (getgenv and getgenv()) or _G
-    local fakeRef = rawget(ge2, "__FyyFakeReq")
-    local reqFns = {
-        rawget(ge2, "__FyyTrueRequest"),
-        rawget(ge2, "__FyyOrigRequest"),
-    }
-    for _, name in ipairs({"request","http_request","httprequest"}) do
-        local fn = rawget(ge2, name)
-        if type(fn) == "function" and fn ~= fakeRef then
-            table.insert(reqFns, fn)
-        elseif type(fn) == "table" and type(rawget(fn,"request")) == "function" then
-            table.insert(reqFns, rawget(fn,"request"))
-        end
-    end
-    for _, fn in ipairs(reqFns) do
-        if type(fn) == "function" and fn ~= fakeRef then
-            local ok2, res2 = pcall(fn, {
-                Url = url, Method = method or "POST",
-                Headers = headers or {}, Body = body or "",
-            })
-            if ok2 and res2 and type(res2) == "table" and (res2.StatusCode or 0) > 0 then
-                return res2
-            end
-        end
-    end
+    if ok and res and (res.StatusCode or 0) > 0 then return res end
     return nil
 end
 
@@ -107,174 +82,35 @@ end
 --   3. PETS: AssetRoster.ReadSnapshot() — strict filter OwnerUserId
 -- ============================================================
 
--- Parse plot eggs dari webhook payload yang sudah di-intercept di OneFile
--- Format components v2: components[1].components[5] = Plot Eggs
---                       components[1].components[6] = Active Pets
---                       components[1].components[3].components[2] = Plot Summary
-local function parseWebhookPayload(payload)
-    if type(payload) ~= "table" then return nil end
-
-    local result = {}
-
-    -- Navigasi ke components[1].components
-    local c1 = type(payload.components) == "table" and payload.components[1]
-    if not c1 or type(c1.components) ~= "table" then return nil end
-    local inner = c1.components
-
-    -- Helper: ambil content dari component by index
-    local function getContent(idx)
-        local c = inner[idx]
-        if c and type(c.content) == "string" then return c.content end
-        return nil
-    end
-
-    -- Helper: parse number string seperti "1.07B", "35.2M", "98.32B"
-    local function parseNum(s)
-        if not s then return 0 end
-        s = s:gsub(",", ""):gsub("%s", "")
-        local num = tonumber(s:match("^([%d%.]+)")) or 0
-        local suf = s:match("[KMBTkmbt]$")
-        if suf then suf = suf:upper() end
-        if suf == "K" then return num * 1e3
-        elseif suf == "M" then return num * 1e6
-        elseif suf == "B" then return num * 1e9
-        elseif suf == "T" then return num * 1e12
-        end
-        return num
-    end
-
-    -- ── Plot Eggs (component index 5) ─────────────────────────────
-    -- Format: "• **Name** · Rarity · **Kg Kg** · **$Rate/s** · Mutation"
-    -- atau:   "• **Name** · Rarity · **Kg Kg** · **$Rate/s**"
-    local plotEggsContent = getContent(5)
-    if plotEggsContent then
-        local eggs = {}
-        for line in plotEggsContent:gmatch("[^\n]+") do
-            -- Strip markdown bold
-            line = line:gsub("%*%*", "")
-            -- Pattern: "• Name · Rarity · Weight Kg · $Rate/s" dengan optional mutation
-            local name, rarity, weight, rate = line:match(
-                "^[•%*%-]%s*(.-)%s*·%s*(.-)%s*·%s*([%d%.,]+)%s*Kg%s*·%s*%$([%d%.]+[KMBT]?)/s"
-            )
-            if name and rarity and weight and rate then
-                -- Ambil mutations (sisa setelah $/s)
-                local rest = line:match("/s%s*·?%s*(.+)$") or ""
-                local muts = {}
-                for m in rest:gmatch("[^/,·]+") do
-                    local mt = m:match("^%s*(.-)%s*$")
-                    if mt and #mt > 0 then table.insert(muts, mt) end
-                end
-                table.insert(eggs, {
-                    name          = name,
-                    rarity        = rarity,
-                    weightKg      = tonumber(weight:gsub(",","")) or 0,
-                    ratePerSecond = parseNum(rate),
-                    mutations     = muts,
-                })
-            end
-        end
-        if #eggs > 0 then result.plotEggs = eggs end
-    end
-
-    -- ── Active Pets (component index 6) ───────────────────────────
-    -- Format: "• **Name** · Rarity · **$Rate/s** · Mutation"
-    -- atau:   "• **Name ×N** · Rarity · **$Rate/s**"
-    local petsContent = getContent(6)
-    if petsContent then
-        local pets = {}
-        for line in petsContent:gmatch("[^\n]+") do
-            line = line:gsub("%*%*", "")
-            -- Coba match dengan ×N (grouped)
-            local name, rarity, rate = line:match(
-                "^[•%*%-]%s*(.-)%s*·%s*(.-)%s*·%s*%$([%d%.]+[KMBT]?)/s"
-            )
-            if name and rarity and rate then
-                local rest = line:match("/s%s*·?%s*(.+)$") or ""
-                local muts = {}
-                for m in rest:gmatch("[^/,·]+") do
-                    local mt = m:match("^%s*(.-)%s*$")
-                    if mt and #mt > 0 then table.insert(muts, mt) end
-                end
-                table.insert(pets, {
-                    name          = name,
-                    rarity        = rarity,
-                    ratePerSecond = parseNum(rate),
-                    moneyPerSecond= parseNum(rate),
-                    mutations     = muts,
-                })
-            end
-        end
-        if #pets > 0 then result.pets = pets end
-    end
-
-    -- ── Plot Summary (component[3].components[2]) ──────────────────
-    local c3 = inner[3]
-    if type(c3) == "table" and type(c3.components) == "table" then
-        local summaryContent = type(c3.components[2]) == "table"
-            and c3.components[2].content or nil
-        if summaryContent then
-            summaryContent = summaryContent:gsub("%*%*","")
-            local income  = summaryContent:match("Income%s*·%s*%$([%d%.]+[KMBT]?)/s")
-            local speed   = summaryContent:match("Speed%s*·%s*([%d%.]+[KMBT]?)")
-            local placed  = summaryContent:match("Placed eggs%s*·%s*(%d+)")
-            local capacity= summaryContent:match("Placed eggs%s*·%s*%d+/(%d+)")
-            local active  = summaryContent:match("Active pets%s*·%s*(%d+)")
-            result.plotSnapshot = {
-                income         = parseNum(income or "0"),
-                speed          = parseNum(speed or "0"),
-                placedEggCount = tonumber(placed) or 0,
-                capacity       = tonumber(capacity) or 0,
-                activePetCount = tonumber(active) or 0,
-                plotEggCount   = result.plotEggs and #result.plotEggs or 0,
-                petCount       = result.pets and #result.pets or 0,
-            }
-        end
-    end
-
-    return (result.plotEggs or result.pets) and result or nil
-end
-
 -- ============================================================
--- MODULE CACHE — require sekali, pakai terus
+-- MODULE CACHE — require sekali saat load, pakai terus
 -- ============================================================
-local _rs2        = game:GetService("ReplicatedStorage")
-local _EggState   = nil
-local _AssetRoster= nil
-local _PlotState  = nil
-local _Assets     = nil
-local _Mutations  = nil
-local _Dir        = nil  -- Assets.Directory cache
+local _EggState    = nil
+local _AssetRoster = nil
+local _PlotState   = nil
+local _Assets      = nil
+local _Mutations   = nil
+local _Dir         = nil  -- Assets.Directory cache
 
-local function _initModules()
-    if not _EggState then
-        local ok, m = pcall(require, _rs2.Client.EggState)
-        if ok then _EggState = m end
+-- Pets cache untuk skip-interval optimization
+local _lastPetsData    = nil
+local _petsSkipCounter = 0
+
+do
+    local rs2 = game:GetService("ReplicatedStorage")
+    local function tryRequire(path)
+        local ok, m = pcall(require, path)
+        return ok and m or nil
     end
-    if not _AssetRoster then
-        local ok, m = pcall(require, _rs2.Client.AssetRoster)
-        if ok then _AssetRoster = m end
-    end
-    if not _PlotState then
-        local ok, m = pcall(require, _rs2.Client.PlotState)
-        if ok then _PlotState = m end
-    end
-    if not _Assets then
-        local ok, m = pcall(require, _rs2.Data.Assets)
-        if ok then
-            _Assets = m
-            if type(m) == "table" and type(m.Directory) == "table" then
-                _Dir = m.Directory
-            end
-        end
-    end
-    if not _Mutations then
-        local ok, m = pcall(require, _rs2.Shared.Modules.Mutations)
-        if ok then _Mutations = m end
+    _EggState    = tryRequire(rs2.Client.EggState)
+    _AssetRoster = tryRequire(rs2.Client.AssetRoster)
+    _PlotState   = tryRequire(rs2.Client.PlotState)
+    _Assets      = tryRequire(rs2.Data.Assets)
+    _Mutations   = tryRequire(rs2.Shared.Modules.Mutations)
+    if _Assets and type(_Assets.Directory) == "table" then
+        _Dir = _Assets.Directory
     end
 end
-
--- Init sekali saat monitor load
-_initModules()
 
 local function getEggAndPlotData(stats)
     local ok1 = _EggState ~= nil
@@ -292,21 +128,6 @@ local function getEggAndPlotData(stats)
     -- Ini real-time — tidak perlu tunggu webhook Discord
     -- Webhook intercept tetap berjalan sebagai bonus kalau ada steal event
     if not ok1 then return end
-
-    -- ── Webhook sebagai bonus update (kalau fresh < 2 menit) ─────
-    pcall(function()
-        local ge2 = (getgenv and getgenv()) or _G
-        local payload = rawget(ge2, "__FYY_LAST_WEBHOOK_PAYLOAD")
-        local ts      = rawget(ge2, "__FYY_LAST_WEBHOOK_TS") or 0
-        -- Hanya pakai webhook kalau fresh (< 2 menit) — bukan primary
-        if not payload or (os.time() - ts) > 120 then return end
-
-        local parsed = parseWebhookPayload(payload)
-        if not parsed then return end
-        if parsed.plotSnapshot then
-            stats.webhookSnapshot = parsed.plotSnapshot
-        end
-    end)
 
     -- ── Live egg data: ReadOwnedEggs + FetchEggRecord + weightUtil ──
     -- weightUtil.WeightKg(rec) = berat aktual include growth
@@ -444,10 +265,21 @@ local function getEggAndPlotData(stats)
 
 
     -- ── Pets dari AssetRoster.ReadSnapshot ────────────────────────
-    -- (ini adalah pets yang di-equip/di-pen, bukan eggs)
-    -- ReadSnapshot() return semua player di server — HARUS filter ketat
+    -- ReadSnapshot berat (scan semua player) — jalankan setiap 3x interval
     pcall(function()
         if not ok2 then return end
+        -- Skip counter: hanya update pets setiap 3 kali interval (~135 detik)
+        if not _petsSkipCounter then _petsSkipCounter = 0 end
+        _petsSkipCounter = _petsSkipCounter + 1
+        if _petsSkipCounter < 3 then
+            -- Pakai data pets terakhir kalau ada
+            if _lastPetsData then
+                stats.pets     = _lastPetsData
+                stats.petCount = #_lastPetsData
+            end
+            return
+        end
+        _petsSkipCounter = 0
         local snap = AssetRoster.ReadSnapshot()
         if type(snap) ~= "table" then return end
 
@@ -498,6 +330,7 @@ local function getEggAndPlotData(stats)
         if #pets > 0 then
             stats.pets     = pets
             stats.petCount = #pets
+            _lastPetsData  = pets  -- cache untuk skip intervals
         end
     end)
 
