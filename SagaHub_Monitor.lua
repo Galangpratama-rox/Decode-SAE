@@ -262,8 +262,9 @@ local function getEggAndPlotData(stats)
         end
     end)
 
-    -- ── Live egg data: ReadOwnedEggs + weightUtil ───────────────
-    -- ReadOwnedEggs = sudah filter per player (akurat)
+    -- ── Live egg data: ReadOwnedEggs + FetchEggRecord + weightUtil ──
+    -- ReadOwnedEggs = UID milik player ini (akurat, tidak campur player lain)
+    -- FetchEggRecord(uid) = data record per egg
     -- weightUtil.WeightKg(rec) = berat aktual include growth
     -- rate = EarningRate * WeightKg
     pcall(function()
@@ -282,11 +283,10 @@ local function getEggAndPlotData(stats)
             dir = Assets.Directory
         end
 
-        -- ReadOwnedEggs: sudah filter per player, tidak campur dengan player lain
+        -- Cari entry milik player ini dari ReadOwnedEggs
         local okR, owned = pcall(EggState.ReadOwnedEggs)
         if not okR or type(owned) ~= "table" then return end
 
-        -- Cari entry milik player ini
         local myEntry = nil
         for _, entry in ipairs(owned) do
             if type(entry) == "table"
@@ -298,28 +298,38 @@ local function getEggAndPlotData(stats)
         end
         if not myEntry or type(myEntry.Records) ~= "table" then return end
 
-        -- eggRuntime.records: berisi rec objects dengan data lengkap
-        -- Map UID -> rec untuk lookup cepat
-        local recordMap = sae.eggRuntime.records or {}
-
         local plotEggs = {}
         for uid in pairs(myEntry.Records) do
-            local rec = recordMap[uid]
+            -- FetchEggRecord untuk dapat data record per egg
+            local okF, rec = pcall(EggState.FetchEggRecord, uid)
+            if not okF or type(rec) ~= "table" then
+                -- Coba juga dari eggRuntime.records
+                rec = sae.eggRuntime.records and sae.eggRuntime.records[uid]
+            end
             if type(rec) ~= "table" then
-                -- Coba FetchEggRecord sebagai fallback
-                local okF, r = pcall(EggState.FetchEggRecord, uid)
-                if okF and type(r) == "table" then rec = r end
+                -- Buat rec minimal dari myEntry.Records[uid]
+                local entryRec = myEntry.Records[uid]
+                if type(entryRec) == "table" then
+                    rec = entryRec
+                end
             end
             if type(rec) == "table" then
-                local state = tostring(rec.State or "Slot")
-                -- Hanya egg yang ditanam (bukan di-carry atau di inventory)
-                if state == "Slot" or state == "placed" or state == "" then
-                    local category = tostring(rec.AssetCategory or "Unknown")
-
-                    -- WeightKg dari weightUtil (akurat, include growth)
+                local category = tostring(rec.AssetCategory or "Unknown")
+                if category == "Unknown" then
+                    -- Skip records tanpa category
+                else
+                    -- WeightKg dari weightUtil
                     local ok_w, weightKg = pcall(weightUtil.WeightKg, rec)
                     weightKg = (ok_w and type(weightKg) == "number" and weightKg > 0)
                         and weightKg or 0
+
+                    -- Fallback weight: dari Assets.Directory base * scale
+                    if weightKg <= 0 then
+                        local dirE = dir and dir[category]
+                        local baseW = dirE and dirE.Egg and safeNum(dirE.Egg.WeightKg or 0) or 0
+                        local scale = safeNum(rec.AssetScale or 1)
+                        weightKg = baseW * scale
+                    end
 
                     -- Data dari Assets.Directory
                     local dirEntry    = dir and dir[category]
@@ -331,7 +341,7 @@ local function getEggAndPlotData(stats)
                     local rarity       = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
                     local rarityNumber = safeNum(rarityData.RarityNumber or 0)
 
-                    -- rate = EarningRate * WeightKg (rumus SAE = sama dengan webhook)
+                    -- rate = EarningRate * WeightKg
                     local ratePerSec = earningRate * weightKg
 
                     -- Mutations
