@@ -241,6 +241,7 @@ local function getEggAndPlotData(stats)
     local ok2, AssetRoster = pcall(require, rs2.Client.AssetRoster)
     local ok3, PlotState   = pcall(require, rs2.Client.PlotState)
     local ok4, Assets      = pcall(require, rs2.Data.Assets)
+    local ok5, Mutations   = pcall(require, rs2.Shared.Modules.Mutations)
 
     -- ── PRIMARY: EggState.FetchEggRecord (live, setiap interval) ──
     -- Ini real-time — tidak perlu tunggu webhook Discord
@@ -340,9 +341,34 @@ local function getEggAndPlotData(stats)
                         end
                     end
 
-                    -- ratePerSecond = SellPrice * 3/200
-                    -- Ini adalah $/s pet saat netas, sama dengan webhook Discord
-                    local ratePerSec = math.floor(sellPrice * 3 / 200)
+                    -- ratePerSecond = SellPrice * 3/200 / 1.2 * EarningsScalar
+                    -- SellPrice*3/200 menghasilkan rate dengan Silver(1.2x) implicit
+                    -- Jadi perlu dibagi 1.2 dulu (base), lalu kali EarningsScalar mutation
+                    local baseRate = sellPrice * 3 / 200 / 1.2
+
+                    -- Ambil EarningsScalar dari mutation
+                    local earningsScalar = 1.0
+                    if ok5 and type(Mutations) == "table" and type(Mutations.Get) == "function" then
+                        -- BaseMutation dari rec
+                        local baseMut = tostring(rec.BaseMutation or "")
+                        if baseMut ~= "" and baseMut ~= "nil" then
+                            local okM, mutCfg = pcall(Mutations.Get, baseMut)
+                            if okM and type(mutCfg) == "table" then
+                                earningsScalar = safeNum(mutCfg.EarningsScalar or 1.0)
+                            end
+                        end
+                        -- Cek juga Mutations array
+                        if type(rec.Mutations) == "table" then
+                            for _, m in ipairs(rec.Mutations) do
+                                local okM2, mutCfg2 = pcall(Mutations.Get, tostring(m))
+                                if okM2 and type(mutCfg2) == "table" and safeNum(mutCfg2.EarningsScalar) > earningsScalar then
+                                    earningsScalar = safeNum(mutCfg2.EarningsScalar)
+                                end
+                            end
+                        end
+                    end
+
+                    local ratePerSec = math.floor(baseRate * earningsScalar)
 
                     if weightKg > 0 then
                         table.insert(plotEggs, {
