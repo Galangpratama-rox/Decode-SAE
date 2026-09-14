@@ -263,10 +263,8 @@ local function getEggAndPlotData(stats)
     end)
 
     -- ── Live egg data: ReadOwnedEggs + FetchEggRecord + weightUtil ──
-    -- ReadOwnedEggs = UID milik player ini (akurat, tidak campur player lain)
-    -- FetchEggRecord(uid) = data record per egg
     -- weightUtil.WeightKg(rec) = berat aktual include growth
-    -- rate = EarningRate * WeightKg
+    -- weightUtil.SellPrice(rec) = nilai jual telur saat netas (ini yang ditampilkan)
     pcall(function()
         if not ok1 then return end
 
@@ -283,7 +281,7 @@ local function getEggAndPlotData(stats)
             dir = Assets.Directory
         end
 
-        -- Cari entry milik player ini dari ReadOwnedEggs
+        -- ReadOwnedEggs: sudah filter per player
         local okR, owned = pcall(EggState.ReadOwnedEggs)
         if not okR or type(owned) ~= "table" then return end
 
@@ -300,30 +298,24 @@ local function getEggAndPlotData(stats)
 
         local plotEggs = {}
         for uid in pairs(myEntry.Records) do
-            -- FetchEggRecord untuk dapat data record per egg
             local okF, rec = pcall(EggState.FetchEggRecord, uid)
             if not okF or type(rec) ~= "table" then
-                -- Coba juga dari eggRuntime.records
                 rec = sae.eggRuntime.records and sae.eggRuntime.records[uid]
-            end
-            if type(rec) ~= "table" then
-                -- Buat rec minimal dari myEntry.Records[uid]
-                local entryRec = myEntry.Records[uid]
-                if type(entryRec) == "table" then
-                    rec = entryRec
-                end
             end
             if type(rec) == "table" then
                 local category = tostring(rec.AssetCategory or "Unknown")
-                if category == "Unknown" then
-                    -- Skip records tanpa category
-                else
-                    -- WeightKg dari weightUtil
+                if category ~= "Unknown" then
+                    -- WeightKg aktual (include growth)
                     local ok_w, weightKg = pcall(weightUtil.WeightKg, rec)
                     weightKg = (ok_w and type(weightKg) == "number" and weightKg > 0)
                         and weightKg or 0
 
-                    -- Fallback weight: dari Assets.Directory base * scale
+                    -- SellPrice = nilai jual telur saat netas
+                    local ok_s, sellPrice = pcall(weightUtil.SellPrice, rec)
+                    sellPrice = (ok_s and type(sellPrice) == "number")
+                        and sellPrice or 0
+
+                    -- Fallback weight dari Assets.Directory
                     if weightKg <= 0 then
                         local dirE = dir and dir[category]
                         local baseW = dirE and dirE.Egg and safeNum(dirE.Egg.WeightKg or 0) or 0
@@ -331,18 +323,14 @@ local function getEggAndPlotData(stats)
                         weightKg = baseW * scale
                     end
 
-                    -- Data dari Assets.Directory
-                    local dirEntry    = dir and dir[category]
-                    local eggData     = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
-                    local rarityData  = (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
-                    local earningRate = safeNum(dirEntry and dirEntry.EarningRate or 0)
+                    -- Data display dari Assets.Directory
+                    local dirEntry   = dir and dir[category]
+                    local eggData    = (dirEntry and type(dirEntry.Egg) == "table") and dirEntry.Egg or {}
+                    local rarityData = (dirEntry and type(dirEntry.Rarity) == "table") and dirEntry.Rarity or {}
 
                     local displayName  = tostring(eggData.DisplayName or category .. " Egg")
                     local rarity       = tostring(rarityData._id or rarityData.DisplayName or "Unknown")
                     local rarityNumber = safeNum(rarityData.RarityNumber or 0)
-
-                    -- rate = EarningRate * WeightKg
-                    local ratePerSec = earningRate * weightKg
 
                     -- Mutations
                     local muts = {}
@@ -352,6 +340,10 @@ local function getEggAndPlotData(stats)
                         end
                     end
 
+                    -- ratePerSecond = SellPrice * 3/200
+                    -- Ini adalah $/s pet saat netas, sama dengan webhook Discord
+                    local ratePerSec = math.floor(sellPrice * 3 / 200)
+
                     if weightKg > 0 then
                         table.insert(plotEggs, {
                             uid           = uid,
@@ -360,7 +352,8 @@ local function getEggAndPlotData(stats)
                             rarity        = rarity,
                             rarityNumber  = rarityNumber,
                             weightKg      = math.floor(weightKg * 100) / 100,
-                            ratePerSecond = math.floor(ratePerSec * 100) / 100,
+                            sellPrice     = math.floor(sellPrice),
+                            ratePerSecond = ratePerSec,
                             mutations     = muts,
                             hasParasite   = rec.HasParasite == true,
                         })
