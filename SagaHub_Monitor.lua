@@ -242,37 +242,28 @@ local function getEggAndPlotData(stats)
     local ok3, PlotState   = pcall(require, rs2.Client.PlotState)
     local ok4, Assets      = pcall(require, rs2.Data.Assets)
 
-    -- ── PRIMARY: baca dari webhook payload yang di-intercept ──────
+    -- ── PRIMARY: EggState.FetchEggRecord (live, setiap interval) ──
+    -- Ini real-time — tidak perlu tunggu webhook Discord
+    -- Webhook intercept tetap berjalan sebagai bonus kalau ada steal event
+    if not ok1 then return end
+
+    -- ── Webhook sebagai bonus update (kalau fresh < 2 menit) ─────
     pcall(function()
         local ge2 = (getgenv and getgenv()) or _G
         local payload = rawget(ge2, "__FYY_LAST_WEBHOOK_PAYLOAD")
         local ts      = rawget(ge2, "__FYY_LAST_WEBHOOK_TS") or 0
-        if not payload or (os.time() - ts) > 300 then return end
+        -- Hanya pakai webhook kalau fresh (< 2 menit) — bukan primary
+        if not payload or (os.time() - ts) > 120 then return end
 
         local parsed = parseWebhookPayload(payload)
         if not parsed then return end
-
-        if parsed.plotEggs and #parsed.plotEggs > 0 then
-            stats.plotEggs     = parsed.plotEggs
-            stats.plotEggCount = #parsed.plotEggs
-            warn("[SagaMonitor] ✅ plotEggs dari webhook: " .. #parsed.plotEggs)
-        end
-        if parsed.pets and #parsed.pets > 0 then
-            stats.pets     = parsed.pets
-            stats.petCount = #parsed.pets
-        end
         if parsed.plotSnapshot then
-            stats.plotSnapshot = parsed.plotSnapshot
+            stats.webhookSnapshot = parsed.plotSnapshot
         end
     end)
-    if not ok1 then return end
 
-    -- ── FALLBACK: PlacedEggRenders + FetchEggRecord + Assets.Directory ──
-    -- Hanya jalan kalau webhook intercept belum ada data
+    -- ── Live egg data dari EggState.FetchEggRecord ────────────────
     pcall(function()
-        if stats.plotEggs and #stats.plotEggs > 0 then return end
-        if not ok1 then return end
-
         local myId   = tostring(lp.UserId)
         local myPrefix = myId .. "_"   -- exact prefix: "11624556573_"
         local ws     = game:GetService("Workspace")
