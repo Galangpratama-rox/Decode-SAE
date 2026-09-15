@@ -496,8 +496,6 @@ do
     local function fake_response(url, method)
         -- Normalise URL
         local u = tostring(url or ""):lower()
-        -- DEBUG: log setiap intercept ke fyycommunity.com
-        warn("[FyyBypass] INTERCEPT >> " .. tostring(url))
         
         -- /api/v1/loader/access-mode -> mode = public_maintenance (keyless)
         if u:find("access%-mode") or u:find("access_mode") or u:find("loader/access") then
@@ -557,7 +555,6 @@ do
         end
         
         -- /api/v1/script-distribution/runtime/resolve -> serve dari GitHub repo kita
-        -- Runtime di-embed di SagaHub_Runtime.lua
         if u:find("runtime/resolve") or u:find("script%-distribution") then
             warn("[FyyBypass] Serving runtime dari GitHub...")
             local _RUNTIME_URL = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Runtime.lua"
@@ -572,6 +569,11 @@ do
                 return nil
             end
         end
+
+        -- Endpoint fyycommunity lain yang tidak dikenal -> return ok generic
+        -- PENTING: jangan return nil karena runtime akan dapat HTTP error
+        -- nil = caller pakai origRequest yang mungkin hit server asli dan gagal
+        return make_response(200, { status = "ok" })
         return nil
     end
     
@@ -777,11 +779,25 @@ do
                 end
             end
             pcall(wf, "FyyCommunity/license.key", "FYY-BYPASS-KEYLESS")
-            -- Tulis ke autoexec di background (task.spawn = tidak blocking)
+            -- Tulis ke autoexec di background
             local _wf_ref = wf
+            local _mf_ref = mf
             task.spawn(function()
                 local _SAGA_EXEC = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua", true))()'
-                for _, autopath in ipairs({"autoexec/SagaHub.lua","auto-exec/SagaHub.lua","autorun/SagaHub.lua"}) do
+                -- Coba semua path yang dipakai berbagai executor mobile
+                local _paths = {
+                    "autoexec/SagaHub.lua",
+                    "auto-exec/SagaHub.lua",
+                    "autorun/SagaHub.lua",
+                    "scripts/autoexec/SagaHub.lua",
+                }
+                -- Buat folder dulu kalau perlu
+                if _mf_ref then
+                    for _, folder in ipairs({"autoexec","auto-exec","autorun"}) do
+                        pcall(_mf_ref, folder)
+                    end
+                end
+                for _, autopath in ipairs(_paths) do
                     pcall(_wf_ref, autopath, _SAGA_EXEC)
                 end
             end)
