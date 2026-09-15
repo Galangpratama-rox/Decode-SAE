@@ -574,7 +574,6 @@ do
         -- PENTING: jangan return nil karena runtime akan dapat HTTP error
         -- nil = caller pakai origRequest yang mungkin hit server asli dan gagal
         return make_response(200, { status = "ok" })
-        return nil
     end
     
     -- ========================================================
