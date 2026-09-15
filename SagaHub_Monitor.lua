@@ -49,15 +49,44 @@ local handoff = rawget(ge, "__FYY_ACCESS_HANDOFF")
 -- REQUEST HELPER
 -- ============================================================
 local function doRequest(url, method, headers, body)
-    -- Pakai HttpService:RequestAsync langsung (tidak bisa di-intercept fakeReq)
-    local hs2 = game:GetService("HttpService")
-    local ok, res = pcall(function()
-        return hs2:RequestAsync({
+    local ge2 = (getgenv and getgenv()) or _G
+    local fakeRef = rawget(ge2, "__FyyFakeReq")
+
+    -- Coba dalam urutan: TrueRequest -> OrigRequest -> request biasa (skip fakeReq)
+    local candidates = {
+        rawget(ge2, "__FyyTrueRequest"),
+        rawget(ge2, "__FyyOrigRequest"),
+    }
+    for _, name in ipairs({"request","http_request","httprequest"}) do
+        local fn = rawget(ge2, name)
+        if type(fn) == "function" and fn ~= fakeRef then
+            table.insert(candidates, fn)
+        end
+    end
+
+    for _, fn in ipairs(candidates) do
+        if type(fn) == "function" then
+            local ok, res = pcall(fn, {
+                Url     = url,
+                Method  = method or "POST",
+                Headers = headers or {},
+                Body    = body or "",
+            })
+            if ok and res and type(res) == "table" and (res.StatusCode or res.Status or 0) > 0 then
+                return res
+            end
+        end
+    end
+
+    -- Last resort: HttpService:RequestAsync
+    local ok2, res2 = pcall(function()
+        return game:GetService("HttpService"):RequestAsync({
             Url = url, Method = method or "POST",
             Headers = headers or {}, Body = body or "",
         })
     end)
-    if ok and res and (res.StatusCode or 0) > 0 then return res end
+    if ok2 and res2 and (res2.StatusCode or 0) > 0 then return res2 end
+
     return nil
 end
 
