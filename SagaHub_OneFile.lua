@@ -414,7 +414,7 @@ do
     -- replace URL-nya dengan SagaHub kita.
     -- =========================================================
     pcall(function()
-        local _SAGA_URL = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua"
+        local _SAGA_URL = "https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/SagaHub_OneFile.lua"
         local _orig_qot = rawget(ge0, "queue_on_teleport")
         if type(_orig_qot) == "function" then
             rawset(ge0, "queue_on_teleport", function(script_src)
@@ -557,7 +557,7 @@ do
         -- /api/v1/script-distribution/runtime/resolve -> serve dari GitHub repo kita
         if u:find("runtime/resolve") or u:find("script%-distribution") then
             warn("[FyyBypass] Serving runtime dari GitHub...")
-            local _RUNTIME_URL = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Runtime.lua"
+            local _RUNTIME_URL = "https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/SagaHub_Runtime.lua"
             local _rok, _rbody = pcall(function()
                 return game:HttpGet(_RUNTIME_URL, true)
             end)
@@ -782,7 +782,7 @@ do
             local _wf_ref = wf
             local _mf_ref = mf
             task.spawn(function()
-                local _SAGA_EXEC = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua", true))()'
+                local _SAGA_EXEC = 'loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/SagaHub_OneFile.lua", true))()'
                 -- Coba semua path yang dipakai berbagai executor mobile
                 local _paths = {
                     "autoexec/SagaHub.lua",
@@ -914,7 +914,7 @@ if _ok then
     task.delay(3, function()
         pcall(function()
             local _ge_tp = (getgenv and getgenv()) or _G
-            local _SAGA_URL2 = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_OneFile.lua"
+            local _SAGA_URL2 = "https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/SagaHub_OneFile.lua"
             local _orig_qot2 = rawget(_ge_tp, "queue_on_teleport")
             if type(_orig_qot2) == "function" then
                 -- Re-wrap untuk pastikan selalu intercept
@@ -961,7 +961,7 @@ if _ok then
     task.delay(6, function()
         pcall(function()
             local _mon_src = game:HttpGet(
-                "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Monitor.lua?v="..tostring(os.time()),
+                "https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/SagaHub_Monitor.lua?v="..tostring(os.time()),
                 true
             )
             if _mon_src and #_mon_src > 100 then

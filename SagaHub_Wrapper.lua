@@ -4,7 +4,7 @@
   Repo: https://github.com/Galangpratama-rox/Decode-SAE
 
   Auto-execute di executor (satu script untuk semua):
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/SagaHub_Wrapper.lua"))()
+    loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/SagaHub_Wrapper.lua"))()
 
   Yang dilakukan:
     1. Load SagaHub_OneFile (bypass + runtime)
@@ -13,7 +13,7 @@
 ================================================================================
 --]]
 
-local RAW = "https://raw.githubusercontent.com/Galangpratama-rox/Decode-SAE/refs/heads/main/"
+local RAW = "https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/"
 
 -- Tunggu game loaded
 pcall(function()
