@@ -389,16 +389,37 @@ end
 -- Semua endpoint otomatis return response yang valid
 -- Robust: hook semua request path + hH45k3O injection
 -- ============================================================
--- Simpan request ASLI sebelum bypass block jalan
--- HARUS di sini, sebelum hookfunction replace request
+-- =========================================================
+-- NATIVE SAVE: Simpan executor native functions SEKALI
+-- Harus di sini, sebelum APAPUN di-wrap/replace
+-- Ini mencegah hook chain accumulation setelah banyak hop
+-- =========================================================
 do
     local _ge_pre = (getgenv and getgenv()) or _G
-    local _pre_req = rawget(_ge_pre, "request")
-                  or rawget(_ge_pre, "http_request")
-                  or rawget(_ge_pre, "httprequest")
-    if type(_pre_req) == "function" then
-        rawset(_ge_pre, "__FyyTrueRequest", _pre_req)
+
+    -- Simpan native request (SEKALI - kalau belum ada)
+    if not rawget(_ge_pre, "__FyyNativeRequest") then
+        local _nr = rawget(_ge_pre, "request")
+                 or rawget(_ge_pre, "http_request")
+                 or rawget(_ge_pre, "httprequest")
+        if type(_nr) == "function" then
+            rawset(_ge_pre, "__FyyNativeRequest", _nr)
+            rawset(_ge_pre, "__FyyTrueRequest", _nr)  -- backward compat
+        end
     end
+
+    -- Simpan native queue_on_teleport (SEKALI - kalau belum ada)
+    if not rawget(_ge_pre, "__FyyNativeQot") then
+        local _nq = rawget(_ge_pre, "queue_on_teleport")
+        if type(_nq) == "function" then
+            rawset(_ge_pre, "__FyyNativeQot", _nq)
+        end
+    end
+
+    -- Reset hook guard agar bypass block bisa re-install
+    -- (tapi native tetap tersimpan)
+    rawset(_ge_pre, "__FyyQotHooked", nil)
+    rawset(_ge_pre, "__FyyBypassActive", nil)
 end
 
 do
@@ -408,26 +429,30 @@ do
 
     -- =========================================================
     -- INTERCEPT queue_on_teleport API (Delta/executor built-in)
-    -- Runtime FyyCommunity memanggil queue_on_teleport() untuk
-    -- menyimpan script yang dijalankan setelah hop server.
-    -- Kita intercept: kalau script berisi fyycommunity.com,
-    -- replace URL-nya dengan SagaHub kita.
+    -- Pakai __FyyNativeQot (executor native) bukan current wrapper
+    -- Guard __FyyQotHooked mencegah chain accumulation per hop
     -- =========================================================
     pcall(function()
         local _SAGA_URL = "https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/SagaHub_OneFile.lua"
-        local _orig_qot = rawget(ge0, "queue_on_teleport")
-        if type(_orig_qot) == "function" then
+        -- Selalu pakai NATIVE queue_on_teleport (bukan wrapper dari hop sebelumnya)
+        local _native_qot = rawget(ge0, "__FyyNativeQot")
+        -- Fallback: kalau belum tersimpan, ambil dan simpan sekarang
+        if not _native_qot then
+            _native_qot = rawget(ge0, "queue_on_teleport")
+            if type(_native_qot) == "function" then
+                rawset(ge0, "__FyyNativeQot", _native_qot)
+            end
+        end
+        if type(_native_qot) == "function" and not rawget(ge0, "__FyyQotHooked") then
+            rawset(ge0, "__FyyQotHooked", true)
             rawset(ge0, "queue_on_teleport", function(script_src)
-                if type(script_src) == "string" and script_src:lower():find("fyycommunity%.com") then
-                    warn("[FyyBypass] queue_on_teleport intercepted — replacing URL")
-                    -- Replace loadstring(game:HttpGet("https://fyycommunity.com"))()?
-                    -- Inject script SagaHub langsung
-                    local new_script = 'loadstring(game:HttpGet("' .. _SAGA_URL .. '", true))()'
-                    return _orig_qot(new_script)
-                end
-                return _orig_qot(script_src)
+                -- Selalu redirect ke SagaHub (tidak perlu cek URL)
+                -- Runtime akan call ini dengan apapun → kita redirect
+                warn("[FyyBypass] queue_on_teleport intercepted")
+                local new_script = 'loadstring(game:HttpGet("' .. _SAGA_URL .. '", true))()'
+                return _native_qot(new_script)
             end)
-            warn("[FyyBypass] queue_on_teleport hooked")
+            warn("[FyyBypass] queue_on_teleport hooked (native)")
         end
     end)
 
@@ -443,11 +468,9 @@ do
                     if not (isf and isf("FyyCommunity")) then mf("FyyCommunity") end
                 end)
             end
-            -- Set persistence file di background (tidak blocking)
-            local _wf2 = wf
-            task.spawn(function()
-                pcall(_wf2, "FyyCommunity/teleport_persistence.json", '{"Version":1,"Enabled":true}')
-            end)
+            -- Write persistence SYNCHRONOUSLY sebelum runtime init
+            -- (task.spawn menyebabkan race condition — runtime bisa baca dulu)
+            pcall(wf, "FyyCommunity/teleport_persistence.json", '{"Version":1,"Enabled":true}')
         end
     end)
     if rawget(ge0, "__FyyBypassActive") then
@@ -652,10 +675,14 @@ do
         -- Set __FyyFakeReq agar Tu669bhFa[(0x5DB)] langsung pakai ini
     do
         local _ge2 = (getgenv and getgenv()) or _G
-        rawset(_ge2, "__FyyFakeReq", make_hooked(
-            rawget(_ge2,"request") or rawget(_ge2,"http_request") or
-            rawget(_ge2,"httprequest") or function() return {StatusCode=0,Body=""} end
-        ))
+        -- Pakai __FyyNativeRequest (executor native) bukan current request
+        -- yang bisa sudah ter-wrap dari hop sebelumnya
+        local _native_req = rawget(_ge2, "__FyyNativeRequest")
+                         or rawget(_ge2, "request")
+                         or rawget(_ge2, "http_request")
+                         or rawget(_ge2, "httprequest")
+                         or function() return {StatusCode=0,Body=""} end
+        rawset(_ge2, "__FyyFakeReq", make_hooked(_native_req))
     end
     print("[FyyBypass] Bypass aktif — keyless mode setiap execute")
     -- Mark bypass sebagai aktif untuk session ini
@@ -916,15 +943,19 @@ if _ok then
         pcall(function()
             local _ge_tp = (getgenv and getgenv()) or _G
             local _SAGA_URL2 = "https://cdn.jsdelivr.net/gh/Galangpratama-rox/Decode-SAE@main/SagaHub_OneFile.lua"
-            local _orig_qot2 = rawget(_ge_tp, "queue_on_teleport")
-            if type(_orig_qot2) == "function" then
-                -- Re-wrap untuk pastikan selalu intercept
+            -- SELALU pakai __FyyNativeQot (executor native, bukan wrapper)
+            -- Ini mencegah double-wrap yang menyebabkan fail setelah 5-7 hop
+            local _native_qot2 = rawget(_ge_tp, "__FyyNativeQot")
+            if type(_native_qot2) == "function" then
+                -- Reset guard agar hook bisa di-install ulang dengan benar
+                rawset(_ge_tp, "__FyyQotHooked", nil)
                 rawset(_ge_tp, "queue_on_teleport", function(script_src)
                     warn("[FyyBypass] queue_on_teleport called (post-payload)")
                     local new_script = 'loadstring(game:HttpGet("' .. _SAGA_URL2 .. '", true))()'
-                    return _orig_qot2(new_script)
+                    return _native_qot2(new_script)  -- native, tidak pernah wrap lagi
                 end)
-                warn("[FyyBypass] queue_on_teleport re-hooked (persistent mode)")
+                rawset(_ge_tp, "__FyyQotHooked", true)
+                warn("[FyyBypass] queue_on_teleport re-hooked via native")
             end
         end)
     end)
