@@ -519,6 +519,8 @@ do
     local function fake_response(url, method)
         -- Normalise URL
         local u = tostring(url or ""):lower()
+        -- DEBUG: log every fyycommunity request
+        warn("[FyyDebug] " .. tostring(method or "?") .. " " .. tostring(url))
         
         -- /api/v1/loader/access-mode -> mode = public_maintenance (keyless)
         if u:find("access%-mode") or u:find("access_mode") or u:find("loader/access") then
@@ -594,8 +596,7 @@ do
         end
 
         -- Endpoint fyycommunity lain yang tidak dikenal -> return ok generic
-        -- PENTING: jangan return nil karena runtime akan dapat HTTP error
-        -- nil = caller pakai origRequest yang mungkin hit server asli dan gagal
+        warn("[FyyDebug] Unknown endpoint, returning generic ok")
         return make_response(200, { status = "ok" })
     end
     
